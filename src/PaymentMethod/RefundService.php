@@ -8,6 +8,7 @@ use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Services\Payments\Refund;
 use Throwable;
 use Vatly\FluentCart\Plugin;
+use WP_Error;
 
 /**
  * Initiates a refund at Vatly and records it on the FluentCart transaction.
@@ -16,6 +17,10 @@ use Vatly\FluentCart\Plugin;
  * vatly-fluent-php release) — until those are typed upstream we record the
  * refund locally on the response of the API call, which is sufficient for the
  * common case of "merchant clicks refund in admin".
+ *
+ * Return contract follows FluentCart's documented gateway shape:
+ * `WP_Error` on failure, array on success. FluentCart's admin layer checks
+ * `is_wp_error()` and surfaces the error message through its normal flow.
  */
 final class RefundService
 {
@@ -25,13 +30,16 @@ final class RefundService
      * @param int                  $amount  Refund amount in cents (0 = full refund).
      * @param array<string, mixed> $args    Optional: reason.
      *
-     * @return array<string, mixed>
+     * @return array<string, mixed>|WP_Error
      */
-    public function refund(OrderTransaction $transaction, int $amount, array $args = []): array
+    public function refund(OrderTransaction $transaction, int $amount, array $args = [])
     {
         $vatlyOrderId = $transaction->vendor_charge_id ?? null;
         if (! $vatlyOrderId || ! str_starts_with((string) $vatlyOrderId, 'order_')) {
-            return ['success' => false, 'message' => __('Original Vatly order ID not found on transaction. Refunds can only be issued after the order has been paid.', 'vatly-for-fluentcart')];
+            return new WP_Error(
+                'vatly_refund_missing_order',
+                __('Original Vatly order ID not found on transaction. Refunds can only be issued after the order has been paid.', 'vatly-for-fluentcart')
+            );
         }
 
         $effectiveAmount = $amount > 0 ? $amount : (int) $transaction->total;
@@ -47,7 +55,10 @@ final class RefundService
                 $payload
             );
         } catch (Throwable $e) {
-            return ['success' => false, 'message' => sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $e->getMessage())];
+            return new WP_Error(
+                'vatly_refund_api_failed',
+                sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $e->getMessage())
+            );
         }
 
         Refund::createOrRecordRefund([
@@ -58,7 +69,10 @@ final class RefundService
             'total'            => $effectiveAmount,
         ], $transaction);
 
-        return ['success' => true, 'message' => __('Refund initiated at Vatly.', 'vatly-for-fluentcart')];
+        return [
+            'success' => true,
+            'message' => __('Refund initiated at Vatly.', 'vatly-for-fluentcart'),
+        ];
     }
 
     /**
