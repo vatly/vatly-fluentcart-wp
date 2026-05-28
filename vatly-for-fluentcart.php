@@ -5,7 +5,7 @@
  * Description:       Accept payments through Vatly — a European Merchant-of-Record handling VAT, invoicing and compliance — inside FluentCart.
  * Version:           0.1.0-alpha
  * Requires at least: 6.2
- * Requires PHP:      8.0
+ * Requires PHP:      8.1
  * Author:            Vatly
  * Author URI:        https://vatly.com
  * License:           MIT

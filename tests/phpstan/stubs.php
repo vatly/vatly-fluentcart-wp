@@ -151,7 +151,9 @@ namespace FluentCart\App\Models {
         public ?string $subscription_type = null;
         public ?string $item_name = null;
         public ?string $name = null;
-        public ?string $ended_at = null;
+        public ?string $canceled_at = null;
+        public ?string $expire_at = null;
+        public ?string $next_billing_date = null;
         public ?object $customer = null;
 
         /** @return Builder<self> */

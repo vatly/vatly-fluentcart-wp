@@ -66,12 +66,16 @@ final class VatlyGateway extends AbstractPaymentGateway
     }
 
     /**
+     * Refund handler — FluentCart calls this with the parent transaction, the
+     * refund amount in cents (positional), and any extra payload as args.
+     *
+     * @param int|float            $amount  Refund amount in cents (full or partial).
      * @param array<string, mixed> $args
      * @return array<string, mixed>
      */
-    public function processRefund(OrderTransaction $transaction, array $args = []): array
+    public function processRefund(OrderTransaction $transaction, $amount, array $args = []): array
     {
-        return (new RefundService($this->plugin))->refund($transaction, $args);
+        return (new RefundService($this->plugin))->refund($transaction, (int) $amount, $args);
     }
 
     public function handleIPN(): void

@@ -49,10 +49,13 @@ final class FluentCartSubscription implements SubscriptionInterface
 
     public function getEndsAt(): ?DateTimeInterface
     {
-        $endedAt = $this->subscription->ended_at ?? null;
-        if ($endedAt === null || $endedAt === '') {
+        // FluentCart's grace-period end lives in `expire_at`; absent until the
+        // subscription has been canceled or expired (DerivesSubscriptionState
+        // treats a null here as "not cancelled").
+        $expireAt = $this->subscription->expire_at ?? null;
+        if ($expireAt === null || $expireAt === '') {
             return null;
         }
-        return new DateTimeImmutable((string) $endedAt);
+        return new DateTimeImmutable((string) $expireAt);
     }
 }

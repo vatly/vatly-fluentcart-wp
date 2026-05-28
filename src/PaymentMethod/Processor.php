@@ -32,7 +32,7 @@ final class Processor
 
         if (! $config->isConfigured()) {
             return [
-                'status'  => 'failed',
+                'success' => false,
                 'message' => __('Vatly is not configured. Set the API key and webhook secret in FluentCart > Settings > Payment Methods > Vatly.', 'vatly-for-fluentcart'),
             ];
         }
@@ -44,7 +44,7 @@ final class Processor
         try {
             $profile = $this->resolveCustomerProfile($order);
         } catch (Throwable $e) {
-            return ['status' => 'failed', 'message' => $e->getMessage()];
+            return ['success' => false, 'message' => $e->getMessage()];
         }
 
         $metadata = array_filter([
@@ -78,10 +78,10 @@ final class Processor
                     );
             }
         } catch (IncompleteInformationException $e) {
-            return ['status' => 'failed', 'message' => $e->getMessage()];
+            return ['success' => false, 'message' => $e->getMessage()];
         } catch (Throwable $e) {
             return [
-                'status'  => 'failed',
+                'success' => false,
                 'message' => sprintf(__('Vatly checkout creation failed: %s', 'vatly-for-fluentcart'), $e->getMessage()),
             ];
         }
@@ -89,8 +89,9 @@ final class Processor
         $transaction->fill(['vendor_charge_id' => $checkout->id])->save();
 
         return [
-            'status'      => 'success',
-            'redirect_to' => $checkout->links->checkoutUrl->href,
+            'success'      => true,
+            'redirect_url' => $checkout->links->checkoutUrl->href,
+            'payment_id'   => $checkout->id,
         ];
     }
 

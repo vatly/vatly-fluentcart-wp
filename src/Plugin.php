@@ -52,7 +52,7 @@ final class Plugin
         $this->booted = true;
 
         add_action('fluent_cart/register_payment_methods', [$this, 'registerGateway']);
-        add_action('fluent_cart/subscription_cancelled', [$this, 'propagateCancellation'], 10, 1);
+        add_action('fluent_cart/payments/subscription_canceled', [$this, 'propagateCancellation'], 10, 1);
 
         (new SubscriptionController($this))->register();
 
@@ -75,13 +75,28 @@ final class Plugin
 
     /**
      * FluentCart admin -> Vatly: propagate merchant-initiated cancellations.
-     * State sync flows back via the subscription.canceled_* webhooks, handled
-     * by fluent's built-in CancelSubscriptionOnCanceled reaction calling our
-     * FluentCartSubscriptionRepository::update.
+     *
+     * FluentCart's `fluent_cart/payments/subscription_canceled` hook passes a
+     * data array containing the subscription, order, customer models plus
+     * old_status / new_status — not a bare Subscription model.
+     *
+     * The same hook also fires when fluent's built-in CancelSubscriptionOnCanceled
+     * reaction (driven by an inbound subscription.canceled_* webhook) flips
+     * status to "canceled" through our FluentCartSubscriptionRepository::update.
+     * To avoid a Vatly→FluentCart→Vatly cancellation loop, the repository sets
+     * {@see FluentCartSubscriptionRepository::$suppressOutboundCancel} for the
+     * duration of its save, and this listener short-circuits when the flag is set.
+     *
+     * @param array<string, mixed> $data
      */
-    public function propagateCancellation(object $subscription): void
+    public function propagateCancellation(array $data): void
     {
-        if (($subscription->payment_method ?? null) !== 'vatly') {
+        if (FluentCartSubscriptionRepository::$suppressOutboundCancel) {
+            return;
+        }
+
+        $subscription = $data['subscription'] ?? null;
+        if (! is_object($subscription) || ($subscription->payment_method ?? null) !== 'vatly') {
             return;
         }
 
