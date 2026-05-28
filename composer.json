@@ -1,0 +1,29 @@
+{
+    "name": "vatly/vatly-for-fluentcart",
+    "description": "Vatly Merchant-of-Record payment gateway for FluentCart",
+    "type": "wordpress-plugin",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Sander van Hooft",
+            "email": "sander@vanhooft.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "vatly/vatly-fluent-php": "^0.8.0-alpha"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Vatly\\FluentCart\\": "src/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
