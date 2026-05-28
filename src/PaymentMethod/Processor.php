@@ -142,8 +142,8 @@ final class Processor
         foreach ($order->items as $line) {
             $productId = get_post_meta((int) $line->post_id, '_vatly_product_id', true);
             if (! $productId) {
-                throw IncompleteInformationException::missingField(
-                    sprintf('_vatly_product_id on product %d', (int) $line->post_id)
+                throw new IncompleteInformationException(
+                    sprintf('Missing _vatly_product_id on product %d', (int) $line->post_id)
                 );
             }
 
@@ -160,13 +160,13 @@ final class Processor
     {
         $line = $order->items[0] ?? null;
         if (! $line) {
-            throw IncompleteInformationException::missingField('subscription order line');
+            throw new IncompleteInformationException('Missing subscription order line');
         }
 
         $planId = get_post_meta((int) $line->post_id, '_vatly_plan_id', true);
         if (! $planId) {
-            throw IncompleteInformationException::missingField(
-                sprintf('_vatly_plan_id on product %d', (int) $line->post_id)
+            throw new IncompleteInformationException(
+                sprintf('Missing _vatly_plan_id on product %d', (int) $line->post_id)
             );
         }
 

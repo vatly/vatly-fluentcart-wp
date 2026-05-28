@@ -20,7 +20,7 @@ use Vatly\FluentCart\Webhook\IPN;
  */
 final class VatlyGateway extends AbstractPaymentGateway
 {
-    /** @var string[] */
+    /** @var array<int, string> */
     public array $supportedFeatures = ['payment', 'webhook', 'refund', 'subscriptions'];
 
     public function __construct(private Plugin $plugin)

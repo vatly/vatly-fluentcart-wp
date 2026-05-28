@@ -1,0 +1,15 @@
+parameters:
+    level: 5
+    paths:
+        - src
+        - vatly-for-fluentcart.php
+    bootstrapFiles:
+        - vendor/php-stubs/wordpress-stubs/wordpress-stubs.php
+        - tests/phpstan/stubs.php
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # PHPStan checks the literal path inside require_once; ABSPATH is a
+        # WP runtime constant pointing at the live install directory, so the
+        # path can't be statically verified at analysis time.
+        - identifier: requireOnce.fileNotFound
+          path: src/Support/Install.php
