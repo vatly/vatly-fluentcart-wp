@@ -13,21 +13,26 @@ use WP_Error;
 /**
  * Initiates a refund at Vatly and records it on the FluentCart transaction.
  *
- * Vatly returns refund.* webhooks (UnsupportedWebhookReceived in the current
- * vatly-fluent-php release) — until those are typed upstream we record the
- * refund locally on the response of the API call, which is sufficient for the
- * common case of "merchant clicks refund in admin".
+ * Today only **full refunds** are supported — they route to Vatly's
+ * `POST /orders/{id}/refunds/full` endpoint and need no item breakdown.
  *
- * Return contract follows FluentCart's documented gateway shape:
- * `WP_Error` on failure, array on success. FluentCart's admin layer checks
- * `is_wp_error()` and surfaces the error message through its normal flow.
+ * Partial refunds intentionally return a WP_Error rather than calling the
+ * regular refund endpoint, because that endpoint requires item-level data
+ * (`{items: {itemId, amount, description}}`) and the Vatly itemIds live on
+ * the Vatly order — not on the FluentCart transaction we receive here. A
+ * correct partial-refund flow would need to GET the Vatly order, match
+ * FluentCart line items to Vatly items, and distribute the partial amount
+ * across them. Out of scope for this iteration; tracked as a follow-up.
+ *
+ * Return contract follows FluentCart's documented gateway shape: WP_Error
+ * on failure, array on success.
  */
 final class RefundService
 {
     public function __construct(private Plugin $plugin) {}
 
     /**
-     * @param int                  $amount  Refund amount in cents (0 = full refund).
+     * @param int                  $amount  Refund amount in cents. 0 means full refund.
      * @param array<string, mixed> $args    Optional: reason.
      *
      * @return array<string, mixed>|WP_Error
@@ -42,15 +47,25 @@ final class RefundService
             );
         }
 
-        $effectiveAmount = $amount > 0 ? $amount : (int) $transaction->total;
+        $transactionTotal = (int) ($transaction->total ?? 0);
+        $isFullRefund = $amount <= 0 || $amount >= $transactionTotal;
 
-        $payload = array_filter([
-            'amount' => $amount > 0 ? ['value' => $this->toApiAmount($amount), 'currency' => $transaction->currency] : null,
-            'reason' => $args['reason'] ?? null,
-        ], fn ($v) => $v !== null);
+        if (! $isFullRefund) {
+            return new WP_Error(
+                'vatly_partial_refund_unsupported',
+                __('Partial refunds are not yet supported by the Vatly gateway. Issue a full refund here, or partially refund the order from the Vatly dashboard.', 'vatly-for-fluentcart')
+            );
+        }
+
+        $metadata = array_filter([
+            'fluentcart_transaction_id' => (string) ($transaction->uuid ?? $transaction->id),
+            'reason'                    => $args['reason'] ?? null,
+        ], fn ($v) => $v !== null && $v !== '');
+
+        $payload = $metadata !== [] ? ['metadata' => $metadata] : [];
 
         try {
-            $refund = $this->plugin->vatly()->getApiClient()->orderRefunds->createForOrderId(
+            $refund = $this->plugin->vatly()->getApiClient()->orderRefunds->createFullRefundForOrderId(
                 (string) $vatlyOrderId,
                 $payload
             );
@@ -66,21 +81,12 @@ final class RefundService
             'payment_method'   => 'vatly',
             'payment_mode'     => $transaction->payment_mode,
             'status'           => 'refunded',
-            'total'            => $effectiveAmount,
+            'total'            => $transactionTotal,
         ], $transaction);
 
         return [
             'success' => true,
-            'message' => __('Refund initiated at Vatly.', 'vatly-for-fluentcart'),
+            'message' => __('Full refund initiated at Vatly.', 'vatly-for-fluentcart'),
         ];
-    }
-
-    /**
-     * FluentCart stores amounts as integer cents; Vatly's API expects a decimal
-     * string in Money shape ({value: "10.00", currency: "EUR"}).
-     */
-    private function toApiAmount(int $cents): string
-    {
-        return number_format($cents / 100, 2, '.', '');
     }
 }

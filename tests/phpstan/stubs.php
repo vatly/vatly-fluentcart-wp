@@ -118,7 +118,10 @@ namespace FluentCart\App\Models {
     class OrderTransaction
     {
         public int $id;
-        public string $uuid = '';
+        // FluentCart populates uuid on most transactions but the public docs
+        // don't guarantee it; defensive nullable so our `?? $id` fallbacks
+        // type-check correctly.
+        public ?string $uuid = null;
         public ?string $vendor_charge_id = null;
         public ?string $status = null;
         public ?int $total = null;
