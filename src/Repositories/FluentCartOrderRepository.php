@@ -163,6 +163,17 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             ]
         );
 
+        // Symmetric counterpart to HandlePaymentFailedOnDunning: the gateway
+        // owns active → failing on payment.failed, so it also owns
+        // failing → active on a successful retry. FluentCart's
+        // recordRenewalPayment records the transaction and advances the next
+        // billing date, but it doesn't have the signal to know this renewal
+        // is *recovering* dunning — only the gateway does.
+        $subscription->refresh();
+        if (in_array($subscription->status, ['failing', 'past_due'], true)) {
+            $subscription->fill(['status' => 'active'])->save();
+        }
+
         $renewalTransaction = OrderTransaction::query()
             ->where('vendor_charge_id', $data->vatlyId)
             ->first();
