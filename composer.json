@@ -11,7 +11,7 @@
     ],
     "require": {
         "php": "^8.1",
-        "vatly/vatly-fluent-php": "^0.8.0-alpha"
+        "vatly/vatly-fluent-php": "^0.8.0-alpha.3"
     },
     "require-dev": {
         "php-stubs/wordpress-stubs": "^6.6",

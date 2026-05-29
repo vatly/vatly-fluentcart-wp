@@ -16,6 +16,7 @@ use Vatly\FluentCart\Repositories\FluentCartOrderRepository;
 use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
 use Vatly\FluentCart\Webhook\EventDispatcher;
+use Vatly\FluentCart\Webhook\Reactions\HandlePaymentFailedOnDunning;
 use Vatly\FluentCart\Webhook\Reactions\StampVatlyInvoiceOnPaid;
 use Vatly\FluentCart\Webhook\WebhookCallRepository;
 
@@ -114,19 +115,25 @@ final class Plugin
             return $this->vatly;
         }
 
+        $bindings = new FluentCartCustomerBindings();
+
         return $this->vatly = new Vatly(new Wiring(
             config:           $this->config(),
             subscriptions:    new FluentCartSubscriptionRepository($this),
             orders:           new FluentCartOrderRepository($this),
             webhookCalls:     new WebhookCallRepository(),
             events:           new EventDispatcher(),
-            customerBindings: new FluentCartCustomerBindings(),
+            customerBindings: $bindings,
             additionalWebhookReactions: [
                 // MoR polish: stamp Vatly's legally-valid invoice URL on the
                 // FluentCart order so receipts can link to it. Runs after the
                 // built-in StoreOrderOnPaid that owns the FluentCart-side
                 // transaction confirmation.
                 new StampVatlyInvoiceOnPaid($this),
+                // Dunning: when Vatly fires payment.failed (renewal payment
+                // failure / dunning start), flip the FluentCart subscription
+                // to `failing` so FluentCart's own dunning notifications fire.
+                new HandlePaymentFailedOnDunning($bindings),
             ],
         ));
     }
