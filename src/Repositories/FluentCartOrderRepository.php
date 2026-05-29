@@ -131,10 +131,14 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
 
     private function recordRenewal(StoreOrderData $data): OrderInterface
     {
+        // `failing` and `past_due` are FluentCart's dunning states; a renewal
+        // payment landing while in either is exactly the recovery case — exclude
+        // them and dunning recovery silently breaks (the renewal goes
+        // unrecorded, the subscription stays stuck in `failing`).
         $subscription = Subscription::query()
             ->where('customer_id', $data->hostCustomerId)
             ->where('payment_method', 'vatly')
-            ->whereIn('status', ['active', 'trialing'])
+            ->whereIn('status', ['active', 'trialing', 'failing', 'past_due'])
             ->orderByDesc('id')
             ->first();
 
