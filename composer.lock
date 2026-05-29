@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "f954fcb0abe6ba8c851566c46cafe65f",
+    "content-hash": "f22f62e7ee1b0d68bf1d81794bde94de",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -145,21 +145,21 @@
         },
         {
             "name": "vatly/vatly-fluent-php",
-            "version": "v0.8.0-alpha.3",
+            "version": "v0.8.0-alpha.4",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-fluent-php.git",
-                "reference": "d0c86ebe2dbc59997fe375c606d031a2473e4997"
+                "reference": "63e43ec51ff9d5f1b8da77092c4bc53349ce3040"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/d0c86ebe2dbc59997fe375c606d031a2473e4997",
-                "reference": "d0c86ebe2dbc59997fe375c606d031a2473e4997",
+                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/63e43ec51ff9d5f1b8da77092c4bc53349ce3040",
+                "reference": "63e43ec51ff9d5f1b8da77092c4bc53349ce3040",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.1",
-                "vatly/vatly-api-php": "^0.1.0-alpha.9"
+                "vatly/vatly-api-php": "^0.1.0-alpha.10"
             },
             "require-dev": {
                 "mockery/mockery": "^1.6",
@@ -191,9 +191,9 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-fluent-php/issues",
-                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.3"
+                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.4"
             },
-            "time": "2026-05-28T21:47:46+00:00"
+            "time": "2026-05-29T14:09:39+00:00"
         }
     ],
     "packages-dev": [
