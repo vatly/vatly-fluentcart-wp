@@ -76,18 +76,25 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
 
         $transaction = $order->transaction;
 
-        // Status is intentionally NOT propagated here. The built-in
-        // StoreOrderOnPaid reaction calls update() with the Vatly enum value
-        // (`paid`) on every webhook re-delivery, but FluentCart's local enum
-        // uses `succeeded` and Confirmations::confirmPaymentSuccessByCharge
-        // already set that during store(). Writing back `paid` would push the
-        // transaction out of FluentCart's documented state and break code
-        // that filters on status === 'succeeded'.
+        // Most Vatly statuses are NOT propagated here: the built-in
+        // StoreOrderOnPaid reaction calls update() with `paid` on every
+        // re-delivery, but FluentCart's local enum uses `succeeded` (set by
+        // Confirmations::confirmPaymentSuccessByCharge during store()).
+        // Writing back `paid` would push the transaction out of FluentCart's
+        // documented state.
+        //
+        // The exception is `canceled` (fired by alpha.7's CancelOrderOnCanceled
+        // reaction): this is a real state transition only Vatly knows about,
+        // so it does need to flow through.
         $dirty = array_filter([
             'total'          => $data->total,
             'currency'       => $data->currency,
             'invoice_number' => $data->invoiceNumber,
         ], fn ($v) => $v !== null);
+
+        if ($data->status === 'canceled') {
+            $dirty['status'] = 'canceled';
+        }
 
         if ($dirty !== []) {
             $transaction->fill($dirty)->save();

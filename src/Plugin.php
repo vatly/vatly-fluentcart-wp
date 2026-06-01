@@ -13,6 +13,7 @@ use Vatly\FluentCart\Customer\FluentCartCustomerBindings;
 use Vatly\FluentCart\PaymentMethod\SubscriptionService;
 use Vatly\FluentCart\PaymentMethod\VatlyGateway;
 use Vatly\FluentCart\Repositories\FluentCartOrderRepository;
+use Vatly\FluentCart\Repositories\FluentCartRefundRepository;
 use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
 use Vatly\FluentCart\Webhook\EventDispatcher;
@@ -121,6 +122,7 @@ final class Plugin
             config:           $this->config(),
             subscriptions:    new FluentCartSubscriptionRepository($this),
             orders:           new FluentCartOrderRepository($this),
+            refunds:          new FluentCartRefundRepository(),
             webhookCalls:     new WebhookCallRepository(),
             events:           new EventDispatcher(),
             customerBindings: $bindings,

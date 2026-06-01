@@ -141,6 +141,26 @@ namespace FluentCart\App\Models {
         public function refresh(): self { return $this; }
     }
 
+    class Refund
+    {
+        public int $id;
+        public ?string $vendor_charge_id = null;
+        public ?string $status = null;
+        public ?int $total = null;
+        public ?string $currency = null;
+        public ?string $payment_method = null;
+        public ?string $payment_mode = null;
+        public ?int $parent_transaction_id = null;
+
+        /** @return Builder<self> */
+        public static function query(): Builder { return new Builder(); }
+
+        /** @param array<string, mixed> $attrs */
+        public function fill(array $attrs): self { return $this; }
+
+        public function save(): bool { return true; }
+    }
+
     class Subscription
     {
         public int $id;
