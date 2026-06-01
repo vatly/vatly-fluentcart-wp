@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to (re-)release (e.g. v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build scoped release zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            REF="${{ github.event.inputs.tag }}"
+          else
+            REF="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip leading 'v' if present (v0.1.0 → 0.1.0).
+          VERSION="${REF#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Build scoped release zip
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bin/build-release.sh
+
+      - name: Verify scoped output
+        run: |
+          set -e
+          SCOPED="build/scoped/vatly-for-fluentcart"
+
+          # Our own namespace stays unprefixed.
+          grep -q "^namespace Vatly\\\\FluentCart;" "${SCOPED}/src/Plugin.php"
+
+          # vatly-fluent-php gets prefixed and Plugin.php points at the
+          # scoped path.
+          grep -q "use Vatly\\\\FluentCart\\\\Vendor\\\\Vatly\\\\Fluent\\\\" "${SCOPED}/src/Plugin.php"
+
+          # composer/ca-bundle prefix proof.
+          grep -q "^namespace Vatly\\\\FluentCart\\\\Vendor\\\\Composer\\\\CaBundle;" \
+            "${SCOPED}/vendor/composer/ca-bundle/src/CaBundle.php"
+
+          # FluentCart's namespace must stay unprefixed (we extend its
+          # AbstractPaymentGateway by exact name).
+          grep -q "^use FluentCart\\\\App\\\\Modules\\\\PaymentMethods\\\\Core\\\\AbstractPaymentGateway;" \
+            "${SCOPED}/src/PaymentMethod/VatlyGateway.php"
+
+          test -f "${SCOPED}/vendor/autoload.php"
+          test -f "${SCOPED}/vendor/composer/autoload_classmap.php"
+
+          grep -c "Vatly\\\\FluentCart\\\\Vendor" "${SCOPED}/vendor/composer/autoload_classmap.php" \
+            | awk '$1 < 100 { print "Classmap looks empty (got " $1 " entries, expected >= 100)"; exit 1 }'
+
+          # Composer's own runtime helpers MUST be reachable by their bare
+          # names — siblings (Symfony, Monolog, Guzzle, …) introspect them
+          # at startup and would fatal on a scoper regression.
+          php -r '
+            require "'"${SCOPED}"'/vendor/autoload.php";
+            foreach ([
+              "Composer\\InstalledVersions",
+              "Composer\\Autoload\\ClassLoader",
+              "Vatly\\FluentCart\\Plugin",
+              "Vatly\\FluentCart\\Vendor\\Vatly\\Fluent\\Vatly",
+              "Vatly\\FluentCart\\Vendor\\Composer\\CaBundle\\CaBundle",
+            ] as $class) {
+              if (! class_exists($class)) {
+                fwrite(STDERR, "Expected class not found: $class\n");
+                exit(1);
+              }
+            }
+            \Composer\InstalledVersions::getRootPackage();
+            echo "Loadability smoke test: OK\n";
+          '
+
+      - name: Attach zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.ref }}
+          files: build/vatly-for-fluentcart-${{ steps.version.outputs.version }}.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true

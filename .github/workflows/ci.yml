@@ -230,3 +230,84 @@ jobs:
           context: ./docker
           file: ./docker/Dockerfile.wp
           push: false
+
+  release-build:
+    name: Release zip smoke build
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Build scoped release zip
+        run: bin/build-release.sh
+
+      # Same invariants the release workflow checks — catch scoper config
+      # regressions on every PR instead of at tag-cut time.
+      - name: Verify scoped output
+        run: |
+          set -e
+          SCOPED="build/scoped/vatly-for-fluentcart"
+
+          # Our own namespace stays unprefixed — php-scoper treats it as a
+          # parent of the prefix path (`Vatly\FluentCart\Vendor`) and leaves
+          # it alone, which is what the bootstrap file relies on.
+          grep -q "^namespace Vatly\\\\FluentCart;" "${SCOPED}/src/Plugin.php"
+
+          # Third-party deps from vatly-fluent-php DO get prefixed — and our
+          # Plugin.php's use statements should now point at the scoped paths.
+          grep -q "use Vatly\\\\FluentCart\\\\Vendor\\\\Vatly\\\\Fluent\\\\" "${SCOPED}/src/Plugin.php"
+
+          # composer/ca-bundle is the canonical example of a transitive dep
+          # we MUST prefix so we don't collide with whatever other plugins
+          # ship.
+          grep -q "^namespace Vatly\\\\FluentCart\\\\Vendor\\\\Composer\\\\CaBundle;" \
+            "${SCOPED}/vendor/composer/ca-bundle/src/CaBundle.php"
+
+          # FluentCart's own classes MUST NOT get prefixed — the live plugin
+          # ships them at the canonical path, and our VatlyGateway extends
+          # AbstractPaymentGateway by exactly that unprefixed name.
+          grep -q "^use FluentCart\\\\App\\\\Modules\\\\PaymentMethods\\\\Core\\\\AbstractPaymentGateway;" \
+            "${SCOPED}/src/PaymentMethod/VatlyGateway.php"
+
+          test -f "${SCOPED}/vendor/autoload.php"
+
+          # Sanity-check the classmap got populated with prefixed entries.
+          # The current floor (~180) is well above what we'd ever expect to
+          # see if a vendored package were silently dropped.
+          test "$(grep -c "Vatly\\\\\\\\FluentCart\\\\\\\\Vendor" "${SCOPED}/vendor/composer/autoload_classmap.php")" -ge 100
+
+          # Composer's own runtime helpers MUST be reachable by their bare
+          # names — the WordPress ecosystem (Symfony, Monolog, Guzzle, …)
+          # introspects these at startup. A scoper regression that prefixes
+          # them produces hard-to-diagnose "cannot redeclare" fatals at
+          # activation time on multi-plugin sites.
+          php -r '
+            require "'"${SCOPED}"'/vendor/autoload.php";
+            foreach ([
+              "Composer\\InstalledVersions",
+              "Composer\\Autoload\\ClassLoader",
+              "Vatly\\FluentCart\\Plugin",
+              "Vatly\\FluentCart\\Vendor\\Vatly\\Fluent\\Vatly",
+              "Vatly\\FluentCart\\Vendor\\Composer\\CaBundle\\CaBundle",
+            ] as $class) {
+              if (! class_exists($class)) {
+                fwrite(STDERR, "Expected class not found: $class\n");
+                exit(1);
+              }
+            }
+            \Composer\InstalledVersions::getRootPackage();
+            echo "Loadability smoke test: OK\n";
+          '
+
+      - name: Upload zip as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vatly-for-fluentcart-release-zip
+          path: build/vatly-for-fluentcart.zip
+          retention-days: 14
