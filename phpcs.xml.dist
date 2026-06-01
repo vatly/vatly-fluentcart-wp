@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<ruleset name="vatly-for-fluentcart">
+    <description>
+        Narrow, security-focused WPCS profile for this plugin.
+
+        The plugin is written in modern PSR-12-ish style (one-true-brace,
+        no spaces inside parens, short array syntax, type hints over
+        docblocks). WordPress-Core would flag thousands of stylistic
+        differences and phpcbf-fixing them risks regressions. So we cherry-pick
+        only the categories that actually catch shipping bugs:
+
+          - WordPress.Security.* (Nonce, EscapeOutput, ValidatedSanitizedInput)
+          - WordPress.DB.PreparedSQL.*
+          - WordPress.WP.I18n           (text domain + translators comments)
+          - WordPress.WP.Capabilities   (catches typo'd capability names)
+          - PHPCompatibilityWP          (PHP version floor)
+
+        Everything else (spacing, brace placement, file naming, docblocks,
+        Yoda conditions, …) is intentionally left to PHPStan / human review.
+    </description>
+
+    <file>src</file>
+    <file>vatly-for-fluentcart.php</file>
+
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+    <exclude-pattern>*/tests/*</exclude-pattern>
+    <exclude-pattern>*/docker/*</exclude-pattern>
+    <exclude-pattern>*/.phpunit.cache/*</exclude-pattern>
+    <exclude-pattern>*/build/*</exclude-pattern>
+
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg value="sp"/>
+    <arg name="cache" value=".phpcs.cache"/>
+
+    <config name="minimum_supported_wp_version" value="6.5"/>
+    <config name="testVersion" value="8.1-"/>
+
+    <!-- Security: missing nonce / capability checks, unsafe output. -->
+    <rule ref="WordPress.Security"/>
+
+    <!-- SQL safety: catch unescaped interpolation in queries. -->
+    <rule ref="WordPress.DB.PreparedSQL"/>
+    <rule ref="WordPress.DB.PreparedSQLPlaceholders"/>
+
+    <!-- Capability sanity: typos in 'manage_options' etc. -->
+    <rule ref="WordPress.WP.Capabilities"/>
+
+    <!-- PHP version compatibility floor. -->
+    <rule ref="PHPCompatibilityWP"/>
+
+    <!-- i18n: enforce our text domain + require translators comments. -->
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="vatly-for-fluentcart"/>
+            </property>
+        </properties>
+    </rule>
+</ruleset>

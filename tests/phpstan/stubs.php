@@ -2,6 +2,12 @@
 /**
  * Stubs used only by PHPStan analysis. Never loaded at runtime.
  *
+ * WordPress core symbols (ABSPATH, dbDelta, *_IN_SECONDS, WP_Error, …) are
+ * supplied by szepeviktor/phpstan-wordpress via phpstan.neon's `includes:`,
+ * so they don't appear here. This file carries only:
+ *   - this plugin's own constants (defined at runtime in the bootstrap file)
+ *   - FluentCart symbols, which have no public stub package today
+ *
  * Wrapped entirely in `namespace { }` blocks because PHP forbids mixing
  * bracketed-namespace code with unbracketed top-level statements.
  */
@@ -13,22 +19,8 @@ namespace {
     defined('VATLY_FLUENTCART_URL')          || define('VATLY_FLUENTCART_URL', '');
     defined('VATLY_FLUENTCART_GATEWAY_SLUG') || define('VATLY_FLUENTCART_GATEWAY_SLUG', 'vatly');
 
-    // Pointed at a real-ish path so require_once ABSPATH . '...' resolves;
-    // the file doesn't actually need to exist because PHPStan doesn't run the
-    // require, it just checks the literal path looks file-shaped.
-    defined('ABSPATH')             || define('ABSPATH', '/var/www/html/');
-    defined('DAY_IN_SECONDS')      || define('DAY_IN_SECONDS', 86400);
-    defined('MINUTE_IN_SECONDS')   || define('MINUTE_IN_SECONDS', 60);
-    defined('HOUR_IN_SECONDS')     || define('HOUR_IN_SECONDS', 3600);
-    defined('WEEK_IN_SECONDS')     || define('WEEK_IN_SECONDS', 604800);
-
     if (! function_exists('fluent_cart_api')) {
         function fluent_cart_api(): object { return new \stdClass(); }
-    }
-
-    if (! function_exists('dbDelta')) {
-        /** @param string|string[] $queries */
-        function dbDelta($queries): array { return []; }
     }
 }
 

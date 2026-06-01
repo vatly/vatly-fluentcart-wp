@@ -76,6 +76,7 @@ final class RefundService
         } catch (Throwable $e) {
             return new WP_Error(
                 'vatly_refund_api_failed',
+                /* translators: %s: error message returned by the Vatly API */
                 sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $e->getMessage())
             );
         }

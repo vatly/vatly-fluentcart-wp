@@ -53,12 +53,17 @@ final class WebhookCallRepository implements WebhookCallRepositoryInterface
 
         $cutoff = gmdate('Y-m-d H:i:s', time() - ($days * DAY_IN_SECONDS));
 
-        return (int) $wpdb->query(
+        // Table identifier comes from $wpdb->prefix + a class constant — never user input — and the cutoff value uses %s.
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $deleted = (int) $wpdb->query(
             $wpdb->prepare(
                 'DELETE FROM ' . $this->tableName() . ' WHERE created_at < %s',
                 $cutoff
             )
         );
+        // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+        return $deleted;
     }
 
     public static function tableName(): string

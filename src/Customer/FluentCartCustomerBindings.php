@@ -26,6 +26,8 @@ final class FluentCartCustomerBindings implements CustomerBindingRepository
     {
         global $wpdb;
 
+        // Table identifier comes from $wpdb->prefix + a class constant — never user input — and all bind values use %s placeholders below.
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $wpdb->query(
             $wpdb->prepare(
                 'INSERT INTO ' . self::tableName() . ' (vatly_customer_id, host_customer_id, updated_at)'
@@ -36,12 +38,15 @@ final class FluentCartCustomerBindings implements CustomerBindingRepository
                 current_time('mysql', true)
             )
         );
+        // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
     }
 
     public function record(string $vatlyCustomerId): void
     {
         global $wpdb;
 
+        // Table identifier comes from $wpdb->prefix + a class constant — never user input — and the bind value uses %s.
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $wpdb->query(
             $wpdb->prepare(
                 'INSERT IGNORE INTO ' . self::tableName() . ' (vatly_customer_id, host_customer_id, updated_at)'
@@ -50,18 +55,22 @@ final class FluentCartCustomerBindings implements CustomerBindingRepository
                 current_time('mysql', true)
             )
         );
+        // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
     }
 
     public function hostCustomerIdFor(string $vatlyCustomerId): ?string
     {
         global $wpdb;
 
+        // Table identifier comes from $wpdb->prefix + a class constant — never user input — and the where-clause value uses %s.
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $row = $wpdb->get_var(
             $wpdb->prepare(
                 'SELECT host_customer_id FROM ' . self::tableName() . ' WHERE vatly_customer_id = %s LIMIT 1',
                 $vatlyCustomerId
             )
         );
+        // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
         return $row !== null && $row !== '' ? (string) $row : null;
     }
@@ -70,12 +79,15 @@ final class FluentCartCustomerBindings implements CustomerBindingRepository
     {
         global $wpdb;
 
+        // Table identifier comes from $wpdb->prefix + a class constant — never user input — and the where-clause value uses %s.
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $row = $wpdb->get_var(
             $wpdb->prepare(
                 'SELECT vatly_customer_id FROM ' . self::tableName() . ' WHERE host_customer_id = %s LIMIT 1',
                 $hostCustomerId
             )
         );
+        // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
         return $row !== null ? (string) $row : null;
     }
