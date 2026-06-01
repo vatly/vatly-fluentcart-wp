@@ -76,6 +76,11 @@ final class VatlyConfig implements ConfigurationInterface
         return $this->getApiKey() !== '' && $this->getWebhookSecret() !== null;
     }
 
+    public function isEnabled(): bool
+    {
+        return (bool) ($this->get('is_active') ?? false);
+    }
+
     /**
      * @return mixed
      */

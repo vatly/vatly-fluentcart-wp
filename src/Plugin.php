@@ -62,6 +62,43 @@ final class Plugin
 
         if (is_admin()) {
             (new ProductMetaBox())->register();
+            add_action('admin_notices', [$this, 'renderAdminNotices']);
+        }
+    }
+
+    /**
+     * Two pilot-readiness admin warnings:
+     *
+     *   1. FluentCart isn't installed/active — the gateway silently no-ops
+     *      otherwise; the merchant needs to know they're staring at a dead
+     *      plugin until they install FluentCart.
+     *
+     *   2. The gateway is enabled AND in test mode — flags the "I forgot to
+     *      flip Live before launch" failure mode where real customers get
+     *      routed through Vatly's sandbox and no actual charges happen.
+     *
+     * Only one shows at a time (FluentCart-missing supersedes testmode-warning
+     * because there's no point warning about test mode if FluentCart isn't
+     * even loaded).
+     */
+    public function renderAdminNotices(): void
+    {
+        if (! function_exists('fluent_cart_api')) {
+            printf(
+                '<div class="notice notice-error"><p><strong>%s</strong> %s</p></div>',
+                esc_html__('Vatly for FluentCart:', 'vatly-for-fluentcart'),
+                esc_html__('FluentCart is required but not active. Install or activate FluentCart to use the Vatly payment gateway.', 'vatly-for-fluentcart')
+            );
+            return;
+        }
+
+        $config = $this->config();
+        if ($config->isEnabled() && $config->isTestmode()) {
+            printf(
+                '<div class="notice notice-warning"><p><strong>%s</strong> %s</p></div>',
+                esc_html__('Vatly:', 'vatly-for-fluentcart'),
+                esc_html__('Test mode is enabled. Payments are routed to Vatly\'s sandbox and will not be charged. Switch to Live mode in the gateway settings before launch.', 'vatly-for-fluentcart')
+            );
         }
     }
 
