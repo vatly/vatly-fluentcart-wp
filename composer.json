@@ -39,7 +39,8 @@
         "phpcs": "phpcs",
         "phpcbf": "phpcbf",
         "test": "phpunit",
-        "test:unit": "phpunit --testsuite=unit"
+        "test:unit": "phpunit --testsuite=unit",
+        "test:integration": "phpunit -c phpunit-integration.xml.dist"
     },
     "config": {
         "sort-packages": true,
