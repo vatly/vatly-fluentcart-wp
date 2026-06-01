@@ -1,0 +1,20 @@
+# WP 6.7+ is required by FluentCart's `requires` header; using 6.7 explicitly
+# pins the base instead of riding `latest` so dev environments are
+# reproducible.
+FROM wordpress:6.7-php8.2-apache
+
+# Composer + git for installing the plugin's PHP deps inside the container.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git unzip less \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+
+# Default php settings tweaks.
+RUN { \
+        echo 'memory_limit = 256M'; \
+        echo 'max_execution_time = 120'; \
+        echo 'display_errors = Off'; \
+        echo 'log_errors = On'; \
+        echo 'error_log = /tmp/php-error.log'; \
+    } > /usr/local/etc/php/conf.d/zz-vatly-fluentcart.ini
