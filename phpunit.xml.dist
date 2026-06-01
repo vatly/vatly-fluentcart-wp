@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.6/phpunit.xsd"
+    bootstrap="tests/bootstrap.php"
+    colors="true"
+    cacheResultFile=".phpunit.cache/test-results"
+    beStrictAboutCoversAnnotation="false"
+    beStrictAboutOutputDuringTests="true"
+    beStrictAboutTodoAnnotatedTests="true"
+    convertDeprecationsToExceptions="false"
+    failOnRisky="true"
+    failOnWarning="true"
+    verbose="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+    </testsuites>
+    <coverage>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+        <exclude>
+            <directory>src/Admin</directory>
+        </exclude>
+    </coverage>
+    <php>
+        <ini name="error_reporting" value="-1" />
+        <!-- Silence the plugin's error_log() calls during the unit suite.
+             Tests that need to assert on logged messages can override this
+             per-test via ini_set(). -->
+        <ini name="error_log" value="/dev/null" />
+    </php>
+</phpunit>
