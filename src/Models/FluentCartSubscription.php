@@ -58,4 +58,30 @@ final class FluentCartSubscription implements SubscriptionInterface
         }
         return new DateTimeImmutable((string) $expireAt);
     }
+
+    /**
+     * Vatly persists the mandate (payment method on file) on every webhook
+     * delivery so consumer billing portals can render "card ending in 4242"
+     * without a per-page-load API roundtrip. FluentCart already surfaces
+     * payment-method info from its own checkout pipeline, so writing the
+     * same fact into a column we don't own would race FluentCart's display
+     * and risk drift.
+     *
+     * Returning null here is the documented "no mandate persisted locally"
+     * answer; vatly-fluent-php's `sync()` semantics treat that as the
+     * conservative case and won't overwrite anything host-side.
+     *
+     * Follow-up: surface the Vatly mandate alongside FluentCart's view in
+     * the subscription admin so the merchant sees both perspectives without
+     * a Vatly dashboard round-trip.
+     */
+    public function getMandateMethod(): ?string
+    {
+        return null;
+    }
+
+    public function getMandateMaskedIdentifier(): ?string
+    {
+        return null;
+    }
 }
