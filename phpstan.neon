@@ -7,5 +7,5 @@ parameters:
         - src
         - vatly-for-fluentcart.php
     bootstrapFiles:
-        - tests/phpstan/stubs.php
+        - tests/FluentCartStubs.php
     treatPhpDocTypesAsCertain: false

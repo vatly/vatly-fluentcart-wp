@@ -1,15 +1,23 @@
 <?php
 /**
- * Stubs used only by PHPStan analysis. Never loaded at runtime.
+ * Stubs for FluentCart + this plugin's own constants.
+ *
+ * Loaded by BOTH PHPStan analysis (via `phpstan.neon` bootstrapFiles) and
+ * PHPUnit unit tests (via `tests/bootstrap.php`). FluentCart has no public
+ * stub package today, so this file is the single source for the SUT's
+ * compile-time and unit-test load-time view of those classes.
  *
  * WordPress core symbols (ABSPATH, dbDelta, *_IN_SECONDS, WP_Error, …) are
- * supplied by szepeviktor/phpstan-wordpress via phpstan.neon's `includes:`,
- * so they don't appear here. This file carries only:
- *   - this plugin's own constants (defined at runtime in the bootstrap file)
- *   - FluentCart symbols, which have no public stub package today
+ * supplied by szepeviktor/phpstan-wordpress for PHPStan and by
+ * `tests/WPStubs.php` for PHPUnit, so they don't appear here.
  *
  * Wrapped entirely in `namespace { }` blocks because PHP forbids mixing
  * bracketed-namespace code with unbracketed top-level statements.
+ *
+ * NOTE: when integration tests load with the real FluentCart plugin
+ * installed, this file MUST NOT be required — the namespaced classes below
+ * would clash with the real ones. The integration bootstrap (added in PR C)
+ * omits this require.
  */
 
 namespace {
@@ -21,6 +29,14 @@ namespace {
 
     if (! function_exists('fluent_cart_api')) {
         function fluent_cart_api(): object { return new \stdClass(); }
+    }
+
+    // Belt-and-braces safety: if the real FluentCart plugin is already loaded
+    // (e.g. a future integration bootstrap forgot to skip this file), bail
+    // out before redeclaring any of the namespaced classes below. The header
+    // comment is documentation; this is enforcement.
+    if (class_exists('FluentCart\\App\\Models\\Order', false)) {
+        return;
     }
 }
 

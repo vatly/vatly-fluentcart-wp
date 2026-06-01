@@ -14,21 +14,32 @@
         "vatly/vatly-fluent-php": "^0.8.0-alpha.11"
     },
     "require-dev": {
+        "brain/monkey": "^2.6",
         "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "mockery/mockery": "^1.6",
         "phpcompatibility/phpcompatibility-wp": "^2.1",
         "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^9.6",
         "szepeviktor/phpstan-wordpress": "^2.0",
-        "wp-coding-standards/wpcs": "^3.0"
+        "wp-coding-standards/wpcs": "^3.0",
+        "yoast/phpunit-polyfills": "^2.0"
     },
     "autoload": {
         "psr-4": {
             "Vatly\\FluentCart\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Vatly\\FluentCart\\Tests\\": "tests/"
+        }
+    },
     "scripts": {
         "analyse": "phpstan analyse --memory-limit=512M",
         "phpcs": "phpcs",
-        "phpcbf": "phpcbf"
+        "phpcbf": "phpcbf",
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite=unit"
     },
     "config": {
         "sort-packages": true,
