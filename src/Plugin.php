@@ -17,6 +17,8 @@ use Vatly\FluentCart\Repositories\FluentCartRefundRepository;
 use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
 use Vatly\FluentCart\Webhook\EventDispatcher;
+use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReceived;
+use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReversed;
 use Vatly\FluentCart\Webhook\Reactions\HandlePaymentFailedOnDunning;
 use Vatly\FluentCart\Webhook\Reactions\StampVatlyInvoiceOnPaid;
 use Vatly\FluentCart\Webhook\WebhookCallRepository;
@@ -136,6 +138,12 @@ final class Plugin
                 // failure / dunning start), flip the FluentCart subscription
                 // to `failing` so FluentCart's own dunning notifications fire.
                 new HandlePaymentFailedOnDunning($bindings),
+                // Chargebacks: vatly-fluent-php dispatches the typed events
+                // but ships no built-in reaction. Flip to `paused` on receipt
+                // (revoke access), restore on reversal, fire WP actions for
+                // merchant-side license-revocation / re-enable hooks.
+                new HandleChargebackReceived($this, $bindings),
+                new HandleChargebackReversed($this, $bindings),
             ],
         ));
     }

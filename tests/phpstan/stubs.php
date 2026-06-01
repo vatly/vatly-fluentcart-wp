@@ -129,6 +129,7 @@ namespace FluentCart\App\Models {
         public ?string $invoice_number = null;
         public ?string $payment_method = null;
         public ?string $payment_mode = null;
+        public ?int $subscription_id = null;
 
         /** @return Builder<self> */
         public static function query(): Builder { return new Builder(); }

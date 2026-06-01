@@ -54,6 +54,37 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->confirmInitialPayment($data, (string) $metadata['fluentcart_transaction_id']);
         }
 
+        // Guest-customer claim-back: a checkout that started without a Vatly
+        // customer (or whose binding wasn't created at checkout time) leaves
+        // the binding repo without a mapping, so StoreOrderData::hostCustomerId
+        // arrives null. If the order's metadata carries the FluentCart customer
+        // id we stamped at checkout, bind it now so renewal / chargeback /
+        // future webhooks can resolve correctly. Uses the same bind() that
+        // CustomerService::createFor uses — idempotent if a binding already
+        // exists.
+        if ($data->hostCustomerId === null && isset($metadata['fluentcart_customer_id'])) {
+            $hostCustomerId = (string) $metadata['fluentcart_customer_id'];
+            if ($hostCustomerId !== '') {
+                $this->plugin->vatly()->getWiring()->customerBindings?->bind(
+                    vatlyCustomerId: $data->customerId,
+                    hostCustomerId: $hostCustomerId,
+                );
+                // Re-route now that we know the customer.
+                return $this->recordRenewal(new StoreOrderData(
+                    vatlyId:        $data->vatlyId,
+                    customerId:     $data->customerId,
+                    status:         $data->status,
+                    total:          $data->total,
+                    currency:       $data->currency,
+                    invoiceNumber:  $data->invoiceNumber,
+                    paymentMethod:  $data->paymentMethod,
+                    subtotal:       $data->subtotal,
+                    taxSummary:     $data->taxSummary,
+                    hostCustomerId: $hostCustomerId,
+                ));
+            }
+        }
+
         if ($data->hostCustomerId !== null) {
             return $this->recordRenewal($data);
         }
