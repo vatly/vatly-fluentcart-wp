@@ -82,6 +82,7 @@ final class Processor
         } catch (Throwable $e) {
             return [
                 'success' => false,
+                /* translators: %s: error message returned by the Vatly API */
                 'message' => sprintf(__('Vatly checkout creation failed: %s', 'vatly-for-fluentcart'), $e->getMessage()),
             ];
         }

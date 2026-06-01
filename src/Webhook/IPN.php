@@ -42,7 +42,15 @@ final class IPN
     {
         $key = 'HTTP_' . str_replace('-', '_', strtoupper(SignatureVerifier::SIGNATURE_HEADER_NAME));
 
-        return (string) ($_SERVER[$key] ?? '');
+        if (! isset($_SERVER[$key])) {
+            return '';
+        }
+
+        // Vatly's signature header has the shape `t=<unix_seconds>,v1=<hex>`
+        // (all ASCII), so sanitize_text_field cannot mangle it. wp_unslash
+        // undoes magic-quotes-style escaping that legacy server configs may
+        // inject; the verifier still rejects anything malformed.
+        return sanitize_text_field(wp_unslash($_SERVER[$key]));
     }
 
     /**

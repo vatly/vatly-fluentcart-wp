@@ -4,12 +4,43 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+
+# Cancel in-progress runs of the same workflow on the same branch so PRs don't
+# pile up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  validate:
+    name: Composer validate + audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      # `--abandoned=report` keeps abandoned-package warnings visible but
+      # doesn't fail the build (those come from upstream phpunit transitively).
+      # Dev deps are audited by default — there's no opt-in flag, and passing
+      # `--no-dev` would *exclude* them.
+      - name: Composer audit
+        run: composer audit --abandoned=report
+
   lint:
     name: PHP lint (${{ matrix.php }})
     runs-on: ubuntu-latest
+    needs: validate
 
     strategy:
       fail-fast: false
@@ -17,11 +48,9 @@ jobs:
         php: ['8.1', '8.2', '8.3', '8.4']
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           coverage: none
@@ -29,23 +58,22 @@ jobs:
       - name: Lint plugin sources
         run: |
           find src vatly-for-fluentcart.php -type f -name '*.php' -print0 \
-            | xargs -0 -n1 php -l
+            | xargs -0 -n1 -P4 php -l
 
   static-analysis:
     name: PHPStan
     runs-on: ubuntu-latest
-    needs: lint
+    needs: validate
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
+          tools: composer:v2
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
@@ -57,4 +85,25 @@ jobs:
         run: composer install --prefer-dist --no-interaction --no-progress
 
       - name: Run PHPStan
-        run: vendor/bin/phpstan analyse --no-progress --memory-limit=512M
+        run: composer analyse -- --no-progress
+
+  cs:
+    name: WPCS
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2, cs2pr
+
+      - run: composer install --no-interaction --prefer-dist
+
+      # `-q` suppresses the progress bar + timing footer that PHPCS would
+      # otherwise interleave with the checkstyle XML, which cs2pr can't parse.
+      - name: WPCS
+        run: composer phpcs -- -q --report=checkstyle | cs2pr
