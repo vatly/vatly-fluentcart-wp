@@ -138,3 +138,73 @@ jobs:
 
       - name: PHPUnit unit suite
         run: composer test:unit
+
+  wp-integration:
+    name: WP ${{ matrix.wp }} / PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        # PHP 8.1 is the floor (fluent v0.8) — 6.5 is the first WP release
+        # whose test scaffold loads cleanly on 8.1 without backports.
+        # `trunk` is forward-looking and allowed to fail.
+        include:
+          - { wp: '6.5', php: '8.1', allow_failure: false }
+          - { wp: 'latest', php: '8.3', allow_failure: false }
+          - { wp: 'trunk', php: '8.3', allow_failure: true }
+    continue-on-error: ${{ matrix.allow_failure }}
+
+    services:
+      mysql:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      WP_TESTS_DIR: /tmp/wordpress-tests-lib
+      WP_CORE_DIR: /tmp/wordpress
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, mbstring, intl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install plugin deps
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install subversion (needed for WP test scaffold)
+        run: sudo apt-get update && sudo apt-get install -y subversion
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h127.0.0.1 -uroot -proot --silent; then
+              echo "MySQL is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "MySQL did not come up in time"; exit 1
+
+      # Downloads matching WP core + test scaffold for the matrix slot's
+      # WP version, then creates the wordpress_test DB. WP-version-pinned
+      # scaffolding is the key — wp-phpunit on packagist only ships one
+      # version per release, and that doesn't generalise across the matrix.
+      - name: Install WP ${{ matrix.wp }} test environment
+        run: bin/install-wp-tests.sh wordpress_test root root 127.0.0.1 ${{ matrix.wp }}
+
+      - name: PHPUnit integration suite
+        run: composer test:integration
