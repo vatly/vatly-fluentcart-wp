@@ -45,7 +45,23 @@ final class HandleChargebackReversed implements WebhookReactionInterface
         $subscription = $this->resolveSubscription($event->originalOrderId);
 
         if ($subscription !== null && ($subscription->status ?? null) === 'paused') {
-            $subscription->fill(['status' => 'active'])->save();
+            // Restore the status that was in effect before the chargeback paused
+            // the subscription — captured by HandleChargebackReceived. This is
+            // the only correct answer when the subscription was already in
+            // dunning (`failing` / `past_due`) at the time the dispute arrived:
+            // blanket `active` would re-grant access despite the underlying
+            // payment failure being unresolved.
+            //
+            // If no prior status is recorded (chargeback received before we
+            // started tracking, or the meta got cleared out-of-band), fall back
+            // to `active` rather than leaving the subscription paused — better
+            // to over-restore than to lock the customer out indefinitely on a
+            // reversed dispute.
+            $priorStatus = (string) ($subscription->getMeta(HandleChargebackReceived::PRE_CHARGEBACK_STATUS_META, '') ?? '');
+            $restoreTo = $priorStatus !== '' ? $priorStatus : 'active';
+
+            $subscription->fill(['status' => $restoreTo])->save();
+            $subscription->updateMeta(HandleChargebackReceived::PRE_CHARGEBACK_STATUS_META, '');
         }
 
         do_action(

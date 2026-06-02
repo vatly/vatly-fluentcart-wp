@@ -47,6 +47,16 @@ final class HandleChargebackReceived implements WebhookReactionInterface
         return $event instanceof OrderChargebackReceived;
     }
 
+    /**
+     * Meta key carrying the FluentCart subscription status we observed just
+     * before flipping it to `paused`. {@see HandleChargebackReversed} reads
+     * it on dispute reversal so the subscription returns to whatever state
+     * it was actually in (active, failing, past_due, …) rather than blanket
+     * `active` — which would falsely re-grant access to a subscription that
+     * was already in dunning when the chargeback landed.
+     */
+    public const PRE_CHARGEBACK_STATUS_META = '_vatly_pre_chargeback_status';
+
     public function handle(object $event): void
     {
         if (! $event instanceof OrderChargebackReceived) {
@@ -56,6 +66,19 @@ final class HandleChargebackReceived implements WebhookReactionInterface
         $subscription = $this->resolveSubscription($event->originalOrderId);
 
         if ($subscription !== null) {
+            // Capture the pre-chargeback status on FIRST receipt only — webhook
+            // re-deliveries (or a follow-up chargeback against a different
+            // order on the same subscription before the first reversal lands)
+            // must not overwrite the original.
+            $existingMeta = (string) ($subscription->getMeta(self::PRE_CHARGEBACK_STATUS_META, '') ?? '');
+            if ($existingMeta === '') {
+                $currentStatus = (string) ($subscription->status ?? '');
+                $subscription->updateMeta(
+                    self::PRE_CHARGEBACK_STATUS_META,
+                    $currentStatus !== '' ? $currentStatus : 'active'
+                );
+            }
+
             $subscription->fill(['status' => 'paused'])->save();
         }
 

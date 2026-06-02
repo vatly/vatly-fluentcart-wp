@@ -175,6 +175,8 @@ namespace FluentCart\App\Models {
     class Subscription
     {
         public int $id;
+        /** @var array<string, mixed> in-memory mirror of FluentCart's subscription meta — phpunit-only */
+        public array $meta = [];
         public ?int $customer_id = null;
         public ?string $vendor_subscription_id = null;
         public ?string $vendor_customer_id = null;
@@ -199,6 +201,10 @@ namespace FluentCart\App\Models {
         public function save(): bool { return true; }
 
         public function refresh(): self { return $this; }
+
+        public function updateMeta(string $key, string $value): void { $this->meta[$key] = $value; }
+
+        public function getMeta(string $key, mixed $default = null): mixed { return $this->meta[$key] ?? $default; }
     }
 }
 
