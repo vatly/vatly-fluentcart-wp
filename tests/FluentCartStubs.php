@@ -168,6 +168,8 @@ namespace FluentCart\App\Models {
         public function fill(array $attrs): self { return $this; }
 
         public function save(): bool { return true; }
+
+        public function updateMeta(string $key, string $value): void {}
     }
 
     class Subscription

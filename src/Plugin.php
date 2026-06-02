@@ -20,6 +20,7 @@ use Vatly\FluentCart\Webhook\EventDispatcher;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReceived;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReversed;
 use Vatly\FluentCart\Webhook\Reactions\HandlePaymentFailedOnDunning;
+use Vatly\FluentCart\Webhook\Reactions\StampVatlyCreditNoteOnRefundCompleted;
 use Vatly\FluentCart\Webhook\Reactions\StampVatlyInvoiceOnPaid;
 use Vatly\FluentCart\Webhook\WebhookCallRepository;
 
@@ -171,6 +172,11 @@ final class Plugin
                 // built-in StoreOrderOnPaid that owns the FluentCart-side
                 // transaction confirmation.
                 new StampVatlyInvoiceOnPaid($this),
+                // MoR polish (refund side): stamp Vatly's credit note URL
+                // onto the FluentCart refund row. The credit note is the
+                // customerInvoice of the credit order Vatly created from
+                // the refund (Refund.orderId → GetOrder → customerInvoice).
+                new StampVatlyCreditNoteOnRefundCompleted($this),
                 // Dunning: when Vatly fires payment.failed (renewal payment
                 // failure / dunning start), flip the FluentCart subscription
                 // to `failing` so FluentCart's own dunning notifications fire.
