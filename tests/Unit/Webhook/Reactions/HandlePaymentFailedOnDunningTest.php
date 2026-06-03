@@ -8,6 +8,7 @@ use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use FluentCart\App\Builder;
 use FluentCart\App\Models\Subscription;
+use Vatly\API\Types\Money;
 use Vatly\API\Types\TaxSummaryCollection;
 use Vatly\API\Webhooks\Events\OrderPaymentFailed;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
@@ -47,10 +48,9 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
             customerId: $customerId,
             orderId: 'ord_failed_1',
             status: 'pending',
-            total: 1999,
-            subtotal: 1652,
+            total: new Money('EUR', '19.99'),
+            subtotal: new Money('EUR', '16.52'),
             taxSummary: new TaxSummaryCollection([]),
-            currency: 'EUR',
             invoiceNumber: null,
             paymentMethod: 'card',
             metadata: $metadata,
