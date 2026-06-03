@@ -177,7 +177,7 @@ final class Plugin
                 // customerInvoice of the credit order Vatly created from
                 // the refund (Refund.orderId → GetOrder → customerInvoice).
                 new StampVatlyCreditNoteOnRefundCompleted($this),
-                // Dunning: when Vatly fires payment.failed (renewal payment
+                // Dunning: when Vatly fires order.payment_failed (renewal payment
                 // failure / dunning start), flip the FluentCart subscription
                 // to `failing` so FluentCart's own dunning notifications fire.
                 new HandlePaymentFailedOnDunning($bindings),
