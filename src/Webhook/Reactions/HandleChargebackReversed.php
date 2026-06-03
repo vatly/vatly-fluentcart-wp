@@ -15,7 +15,7 @@ use Vatly\FluentCart\Plugin;
 /**
  * On Vatly `order.chargeback_reversed`: restore the FluentCart subscription
  * we paused on {@see HandleChargebackReceived} back to `active`, and fire
- * `vatly_for_fluentcart/chargeback_reversed` for downstream re-enable hooks.
+ * `vatly_fluentcart_chargeback_reversed` for downstream re-enable hooks.
  *
  * Only flips status back to `active` if we currently see `paused` on the row —
  * a subscription that was canceled, expired, or moved through another lifecycle
@@ -65,7 +65,7 @@ final class HandleChargebackReversed implements WebhookReactionInterface
         }
 
         do_action(
-            'vatly_for_fluentcart/chargeback_reversed',
+            'vatly_fluentcart_chargeback_reversed',
             $event,
             $subscription,
         );

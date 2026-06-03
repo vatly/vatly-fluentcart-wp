@@ -15,7 +15,7 @@ use Vatly\FluentCart\Plugin;
 /**
  * On Vatly `order.chargeback_received`: flip the FluentCart subscription tied
  * to the disputed order to `paused` (the documented "halt access" state) and
- * fire `vatly_for_fluentcart/chargeback_received` so merchants can plug in
+ * fire `vatly_fluentcart_chargeback_received` so merchants can plug in
  * license revocation, account suspension, or any other downstream effects.
  *
  * `paused` is the closest semantic match in FluentCart's status enum and is
@@ -32,7 +32,7 @@ use Vatly\FluentCart\Plugin;
  *   3. Final fallback: customer-binding → most-recent active subscription.
  *
  * Non-subscription order chargebacks (one-time purchases) don't have a
- * subscription to update — only the `vatly_for_fluentcart/chargeback_received`
+ * subscription to update — only the `vatly_fluentcart_chargeback_received`
  * action fires for those, carrying the order context.
  */
 final class HandleChargebackReceived implements WebhookReactionInterface
@@ -83,7 +83,7 @@ final class HandleChargebackReceived implements WebhookReactionInterface
         }
 
         do_action(
-            'vatly_for_fluentcart/chargeback_received',
+            'vatly_fluentcart_chargeback_received',
             $event,
             $subscription, // may be null for one-time order chargebacks
         );
