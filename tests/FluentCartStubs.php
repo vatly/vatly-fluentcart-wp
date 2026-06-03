@@ -51,6 +51,20 @@ namespace FluentCart\App {
      */
     class Builder
     {
+        /**
+         * phpunit-only test seam: rows staged here are returned by the next
+         * first()/find() call(s), FIFO, so feature tests can drive code that
+         * resolves models via `Model::query()->...->first()` without a real
+         * database. PHPStan never reaches this branch (the queue starts empty),
+         * so analysis still sees the conservative `null` return below.
+         *
+         * @var array<int, object>
+         */
+        public static array $nextResults = [];
+
+        /** Reset the staged-result queue (call in test setUp/tearDown). */
+        public static function reset(): void { self::$nextResults = []; }
+
         /** @return static<TModel> */
         public function where(string $column, mixed $value = null, mixed $extra = null): self { return $this; }
 
@@ -68,10 +82,22 @@ namespace FluentCart\App {
         public function orderByDesc(string $column): self { return $this; }
 
         /** @return TModel|null */
-        public function first(): ?object { return null; }
+        public function first(): ?object { return $this->dequeue(); }
 
         /** @return TModel|null */
-        public function find(int|string $id): ?object { return null; }
+        public function find(int|string $id): ?object { return $this->dequeue(); }
+
+        /** @return TModel|null */
+        private function dequeue(): ?object
+        {
+            if (self::$nextResults !== []) {
+                /** @var TModel $row */
+                $row = array_shift(self::$nextResults);
+                return $row;
+            }
+
+            return null;
+        }
     }
 }
 
@@ -195,8 +221,23 @@ namespace FluentCart\App\Models {
         /** @return Builder<self> */
         public static function query(): Builder { return new Builder(); }
 
-        /** @param array<string, mixed> $attrs */
-        public function fill(array $attrs): self { return $this; }
+        /**
+         * Eloquent-style mass assignment. The stub applies the attributes to
+         * the matching public properties so phpunit tests can observe a
+         * `fill(['status' => 'past_due'])->save()` flip on the in-memory row.
+         *
+         * @param array<string, mixed> $attrs
+         */
+        public function fill(array $attrs): self
+        {
+            foreach ($attrs as $key => $value) {
+                if (property_exists($this, $key)) {
+                    $this->{$key} = $value;
+                }
+            }
+
+            return $this;
+        }
 
         public function save(): bool { return true; }
 

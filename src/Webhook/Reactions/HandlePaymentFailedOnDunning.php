@@ -11,8 +11,9 @@ use Vatly\API\Webhooks\Events\OrderPaymentFailed;
 
 /**
  * On Vatly `order.payment_failed` (typically the start of dunning): mark the
- * affected FluentCart subscription as `failing` so FluentCart's own dunning
- * UI and the `fluent_cart/payments/subscription_failing` hook can take over.
+ * affected FluentCart subscription as `past_due` — FluentCart's canonical
+ * failed-renewal / dunning status — so FluentCart's own dunning UI and the
+ * `fluent_cart/payments/subscription_past_due` notification flow take over.
  *
  * Resolution preference, in order:
  *   1. `metadata.fluentcart_subscription_id` if we stamped it at checkout
@@ -24,12 +25,24 @@ use Vatly\API\Webhooks\Events\OrderPaymentFailed;
  *      that customer. This is the renewal-failure path, which is the
  *      common case.
  *
- * Mirrors the lookup shape of {@see RecordRenewalOnPaid} so the two
- * reactions tell a consistent story about how we attribute order-scoped
- * events to subscriptions.
+ * Mirrors the lookup shape of the renewal `order.paid` recovery path in
+ * {@see \Vatly\FluentCart\Repositories\FluentCartOrderRepository::recordRenewal()}
+ * so the two halves tell a consistent story about how we attribute
+ * order-scoped events to subscriptions: that path owns `past_due → active`
+ * on a successful retry, this one owns `active → past_due` on a failure.
  */
 final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
 {
+    /**
+     * FluentCart's failed-renewal / dunning subscription status. The native
+     * `fluent_cart/payments/subscription_past_due` action is fired off this
+     * transition so the merchant's notification + email flows run — FluentCart
+     * doesn't observe a raw `->fill(['status' => ...])->save()`, so we fire it
+     * explicitly (same pattern the plugin relies on for
+     * `fluent_cart/payments/subscription_canceled`).
+     */
+    public const PAST_DUE_STATUS = 'past_due';
+
     public function __construct(
         private CustomerBindingRepository $bindings,
     ) {}
@@ -54,10 +67,25 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
             return;
         }
 
-        // FluentCart's documented dunning state. The
-        // `fluent_cart/payments/subscription_failing` hook fires off this
-        // transition so the merchant's notification + email flows run.
-        $subscription->fill(['status' => 'failing'])->save();
+        // Idempotent under webhook re-delivery: if the subscription is already
+        // in a dunning state, don't re-fire the merchant notification.
+        $alreadyDunning = in_array(
+            (string) ($subscription->status ?? ''),
+            [self::PAST_DUE_STATUS, 'failing'],
+            true,
+        );
+
+        $subscription->fill(['status' => self::PAST_DUE_STATUS])->save();
+
+        if (! $alreadyDunning) {
+            // FluentCart fires its own status-transition notifications when its
+            // native status setter runs; we bypass that via fill()->save(), so
+            // mirror the native hook ourselves so dunning emails / merchant
+            // listeners run. Passes the subscription + the originating Vatly
+            // event for context.
+            do_action('fluent_cart/payments/subscription_past_due', $subscription, $event);
+            do_action('vatly_fluentcart_subscription_past_due', $subscription, $event);
+        }
     }
 
     private function resolveSubscription(OrderPaymentFailed $event): ?Subscription
@@ -74,10 +102,14 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
             return null;
         }
 
+        // Include the dunning states too: a re-delivered order.payment_failed
+        // (or a second failed retry) must still resolve a subscription we've
+        // already flipped to past_due / failing, otherwise the redelivery
+        // would fall through to the "could not attribute" log.
         return Subscription::query()
             ->where('customer_id', (int) $hostCustomerId)
             ->where('payment_method', 'vatly')
-            ->whereIn('status', ['active', 'trialing'])
+            ->whereIn('status', ['active', 'trialing', 'failing', self::PAST_DUE_STATUS])
             ->orderByDesc('id')
             ->first();
     }
