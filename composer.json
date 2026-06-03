@@ -11,7 +11,7 @@
     ],
     "require": {
         "php": "^8.1",
-        "vatly/vatly-fluent-php": "^0.8.0-alpha.11"
+        "vatly/vatly-fluent-php": "^0.8.0-alpha.15"
     },
     "require-dev": {
         "brain/monkey": "^2.6",

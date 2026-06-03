@@ -9,7 +9,7 @@ use Vatly\Fluent\Contracts\EventDispatcherInterface;
 /**
  * Bridges vatly-fluent-php's event POPOs onto WordPress action hooks so other
  * plugins can subscribe via add_action(). The action name is derived from the
- * event class — e.g. Vatly\Fluent\Events\OrderPaid → vatly/order_paid.
+ * event class — e.g. Vatly\API\Webhooks\Events\OrderPaid → vatly/order_paid.
  */
 final class EventDispatcher implements EventDispatcherInterface
 {

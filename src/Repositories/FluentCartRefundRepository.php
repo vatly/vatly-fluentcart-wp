@@ -40,6 +40,39 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
         return $refund ? new FluentCartRefund($refund) : null;
     }
 
+    /**
+     * Read-side helper that backs fluent's {@see \Vatly\Fluent\OrderHandle}
+     * traversal. FluentCart's Refund row carries the Vatly refund id
+     * (`vendor_charge_id`) but stores neither the Vatly customer id nor the
+     * Vatly original-order id in vendor-neutral terms (see
+     * {@see \Vatly\FluentCart\Models\FluentCartRefund::getOriginalOrderId()}),
+     * so there's no column to scope a customer-wide lookup against. We return
+     * an empty list rather than guess — fluent treats an absent/empty refund
+     * reader as "no locally tracked refunds" (`OrderHandle::refunds()` falls
+     * back to `?? []`), so this is a correct, non-lossy answer.
+     *
+     * @return RefundInterface[]
+     */
+    public function listForCustomer(string $customerId): array
+    {
+        return [];
+    }
+
+    /**
+     * Companion to {@see self::listForCustomer()}. The Vatly original-order id
+     * isn't persisted on the FluentCart Refund row in vendor-neutral terms
+     * (the link runs Refund → parent OrderTransaction → `vendor_charge_id`,
+     * which we deliberately don't denormalise), so we can't scope a query by
+     * it without a multi-hop lookup the built-in reaction never consumes.
+     * Returns an empty list for the same reason as the customer variant.
+     *
+     * @return RefundInterface[]
+     */
+    public function listForOrder(string $vatlyOrderId): array
+    {
+        return [];
+    }
+
     public function store(StoreRefundData $data): ?RefundInterface
     {
         // Out-of-band refund initiation (e.g. merchant clicks refund in the

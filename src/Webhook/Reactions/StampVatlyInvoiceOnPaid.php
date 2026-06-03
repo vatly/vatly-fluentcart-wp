@@ -7,7 +7,7 @@ namespace Vatly\FluentCart\Webhook\Reactions;
 use FluentCart\App\Models\Order;
 use Throwable;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
-use Vatly\Fluent\Events\OrderPaid;
+use Vatly\API\Webhooks\Events\OrderPaid;
 use Vatly\FluentCart\Plugin;
 
 /**

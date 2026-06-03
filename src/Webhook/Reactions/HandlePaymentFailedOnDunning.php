@@ -7,7 +7,7 @@ namespace Vatly\FluentCart\Webhook\Reactions;
 use FluentCart\App\Models\Subscription;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
-use Vatly\Fluent\Events\PaymentFailed;
+use Vatly\API\Webhooks\Events\PaymentFailed;
 
 /**
  * On Vatly `payment.failed` (typically the start of dunning): mark the

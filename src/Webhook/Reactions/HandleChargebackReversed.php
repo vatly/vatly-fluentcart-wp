@@ -9,7 +9,7 @@ use FluentCart\App\Models\Subscription;
 use Throwable;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
-use Vatly\Fluent\Events\OrderChargebackReversed;
+use Vatly\API\Webhooks\Events\OrderChargebackReversed;
 use Vatly\FluentCart\Plugin;
 
 /**

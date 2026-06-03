@@ -34,6 +34,24 @@ class FluentCartRefundRepositoryTest extends TestCase
         self::assertNull($result);
     }
 
+    public function test_list_for_customer_returns_empty_array(): void
+    {
+        // FluentCart's Refund row carries no vendor-neutral Vatly customer id,
+        // so the read-side helper returns an empty (but valid) list.
+        $result = (new FluentCartRefundRepository())->listForCustomer('cus_1');
+
+        self::assertSame([], $result);
+    }
+
+    public function test_list_for_order_returns_empty_array(): void
+    {
+        // The Vatly original-order id isn't denormalised onto the Refund row,
+        // so the order-scoped read returns an empty list rather than guess.
+        $result = (new FluentCartRefundRepository())->listForOrder('ord_1');
+
+        self::assertSame([], $result);
+    }
+
     public function test_update_short_circuits_for_foreign_refund_interface(): void
     {
         $foreign = Mockery::mock(RefundInterface::class);
