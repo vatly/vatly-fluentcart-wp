@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\PaymentMethod;
 
+use DateTimeImmutable;
 use FluentCart\App\Modules\PaymentMethods\Core\PaymentInstance;
 use Throwable;
+use Vatly\Fluent\Builders\SubscriptionBuilder;
 use Vatly\Fluent\CustomerProfile;
 use Vatly\Fluent\Exceptions\CustomerAlreadyBoundException;
 use Vatly\Fluent\Exceptions\IncompleteInformationException;
@@ -60,13 +62,16 @@ final class Processor
 
         try {
             if ($isSubscription) {
-                $checkout = $vatly
+                $builder = $vatly
                     ->subscriptionBuilder($profile)
                     ->toPlan($this->resolveSubscriptionPlanId($order))
                     ->withQuantity((int) ($order->items[0]->quantity ?? 1))
                     ->withRedirectUrlSuccess($successUrl)
-                    ->withRedirectUrlCanceled($cancelUrl)
-                    ->create(['metadata' => $metadata]);
+                    ->withRedirectUrlCanceled($cancelUrl);
+
+                $this->applyTrial($builder, $paymentInstance->subscription);
+
+                $checkout = $builder->create(['metadata' => $metadata]);
             } else {
                 $checkout = $vatly
                     ->checkoutBuilder($profile)
@@ -173,6 +178,43 @@ final class Processor
         }
 
         return (string) $planId;
+    }
+
+    /**
+     * Carry FluentCart's configured trial period over to the Vatly subscription
+     * so the first charge lands after the trial instead of at checkout.
+     *
+     * FluentCart's `fct_subscriptions` row exposes `trial_days` (whole-day count,
+     * 0 = no trial) and `trial_ends_at` (datetime, null = no trial). We prefer the
+     * day-count because it maps 1:1 onto Vatly's whole-day `trialDays` input; we
+     * only fall back to the end-date when the day-count is absent. When neither
+     * indicates a trial, nothing is set and the plan-level default (if any) applies.
+     */
+    private function applyTrial(SubscriptionBuilder $builder, object $subscription): void
+    {
+        $trialDays = isset($subscription->trial_days) ? (int) $subscription->trial_days : 0;
+        if ($trialDays > 0) {
+            $builder->withTrialDays($trialDays);
+
+            return;
+        }
+
+        $trialEndsAt = $subscription->trial_ends_at ?? null;
+        if (! empty($trialEndsAt)) {
+            try {
+                $endsAt = $trialEndsAt instanceof \DateTimeInterface
+                    ? $trialEndsAt
+                    : new DateTimeImmutable((string) $trialEndsAt);
+            } catch (Throwable $e) {
+                return;
+            }
+
+            // Only honor a trial end that is still in the future; a past date
+            // means the trial has already elapsed (bill immediately).
+            if ($endsAt->getTimestamp() > time()) {
+                $builder->withTrialEndsAt($endsAt);
+            }
+        }
     }
 
     private function returnUrl(object $order, object $transaction, string $outcome): string

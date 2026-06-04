@@ -216,6 +216,8 @@ namespace FluentCart\App\Models {
         public ?string $canceled_at = null;
         public ?string $expire_at = null;
         public ?string $next_billing_date = null;
+        public ?int $trial_days = null;
+        public ?string $trial_ends_at = null;
         public ?object $customer = null;
 
         /** @return Builder<self> */
