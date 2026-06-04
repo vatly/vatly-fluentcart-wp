@@ -36,8 +36,19 @@ use WP_Error;
  * reaction that vatly-fluent-php doesn't yet ship — once upstream surfaces
  * typed Refund events, add a reaction that updates the FluentCart refund row.
  *
- * Return contract follows FluentCart's documented gateway shape: WP_Error
- * on failure, array on success.
+ * ── Return contract (verified against FluentCart free 1.3.28) ───────────────
+ * FluentCart's `Refund::processRefund` creates the refund OrderTransaction
+ * itself, calls `$gateway->processRefund(...)`, and assigns the *scalar* return
+ * value straight to that transaction's `vendor_charge_id`
+ * (app/Services/Payments/Refund.php:85-92). So a gateway's refund entrypoint
+ * must return the vendor refund id (string) on success, or a WP_Error on
+ * failure — NOT an array. (The integration-guide prose mentions an
+ * `['success'=>true,'refund_id'=>…]` array, but the canonical Paystack gateway
+ * and the core consumer both use a scalar id: PaystackRefund returns
+ * `Arr::get($refund,'data.id')`.) We therefore return `$refund->id`. The same
+ * id is also stamped onto our locally-recorded refund row via
+ * `Refund::createOrRecordRefund`, which de-dups against the row core just
+ * created, so both sides converge on one refund transaction.
  */
 final class RefundService
 {
@@ -47,7 +58,7 @@ final class RefundService
      * @param int                  $amount  Refund amount in cents. 0 means full refund.
      * @param array<string, mixed> $args    Optional: reason.
      *
-     * @return array<string, mixed>|WP_Error
+     * @return string|WP_Error Vendor (Vatly) refund id on success, WP_Error on failure.
      */
     public function refund(OrderTransaction $transaction, int $amount, array $args = [])
     {
@@ -94,10 +105,8 @@ final class RefundService
             'total'            => $transactionTotal,
         ], $transaction);
 
-        return [
-            'success' => true,
-            'message' => __('Refund initiated at Vatly. The refund will move to "refunded" once Vatly confirms the payout.', 'vatly-for-fluentcart'),
-        ];
+        // Scalar vendor refund id → FluentCart stamps it on the refund txn it created.
+        return (string) ($refund->id ?? '');
     }
 
     /**
@@ -119,7 +128,7 @@ final class RefundService
      * @param int                  $amount Refund amount in cents (already known partial).
      * @param array<string, mixed> $args   Optional: reason.
      *
-     * @return array<string, mixed>|WP_Error
+     * @return string|WP_Error Vendor (Vatly) refund id on success, WP_Error on failure.
      */
     private function partialRefund(OrderTransaction $transaction, string $vatlyOrderId, int $amount, array $args)
     {
@@ -185,10 +194,8 @@ final class RefundService
             'total'            => $amount,
         ], $transaction);
 
-        return [
-            'success' => true,
-            'message' => __('Refund initiated at Vatly. The refund will move to "refunded" once Vatly confirms the payout.', 'vatly-for-fluentcart'),
-        ];
+        // Scalar vendor refund id → FluentCart stamps it on the refund txn it created.
+        return (string) ($refund->id ?? '');
     }
 
     /**

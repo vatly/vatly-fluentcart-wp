@@ -11,40 +11,45 @@ use FluentCart\App\Models\Order;
  *
  * Vatly issues the legally valid invoice / credit note. For any order paid via
  * the Vatly gateway (`payment_method === 'vatly'`) the FluentCart side must NOT
- * present its own competing PDF invoice/receipt, and should instead surface the
- * Vatly invoice link.
+ * email its own competing receipt/invoice (and must not attach its own PDF), and
+ * should instead surface the Vatly invoice link on the receipt page.
  *
  * ── Hook honesty (verified against FluentCart free v1.3.28) ─────────────────
- * Every hook wired below was confirmed to exist in the FluentCart **free**
- * source. The earlier revision of this class was written against eight invented
- * hook names (`fluent_cart/email/should_attach_invoice`,
- * `fluent_cart/order/can_edit_billing`, …) — none of those exist in core and
- * have been removed. What free core actually exposes:
+ * Every hook wired below was grep-confirmed to exist AND fire in the FluentCart
+ * **free** source. Two hooks the previous revision relied on were removed because
+ * they are dead on free:
  *
- *   1. Customer-facing receipt injection — `fluent_cart/receipt/thank_you/*`
- *      actions fire while rendering the thank-you / receipt page. We hook
- *      `after_order_items` to auto-render the Vatly invoice link. VERIFIED.
- *   2. PDF receipt/invoice generation — the only suppression point is the
- *      `fluent_cart/pdf/generate_receipt` short-circuit filter. It is the same
- *      filter used both for the email PDF attachment and the dashboard download.
- *      It is, however, only ever invoked when FluentCart **Pro** + FluentPDF is
- *      active (`App::isProActive() && defined('FLUENT_PDF')`); on a free install
- *      no PDF is generated at all, so there is nothing to suppress. We gate the
- *      filter for Vatly orders anyway so the suppression is correct on Pro.
- *      VERIFIED (hook real; effective only on Pro).
- *   3. Refunds — `fluent_cart/order_refunded` / `order_fully_refunded` /
- *      `order_partially_refunded` fire as ACTIONS with a `$data` array. Free
- *      core exposes NO refund-PDF / refund-invoice-URL filter to redirect, so
- *      there is nothing to suppress there; the credit-note URL is surfaced via
- *      the Vatly portal / the stamped meta, not by intercepting a FluentCart PDF.
- *      The action is wired only as an observation point (strict no-op for
- *      non-Vatly orders). VERIFIED.
- *   4. Billing-detail edits — free core fires NO action/filter when an order's
- *      or customer's billing/address is edited (`CustomerAddressResource::update`
- *      and the admin `CustomerController::updateAddress` have no hooks). There is
- *      no free hook to gate, so the guessed `can_edit_billing` /
- *      `before_update_billing` filters were removed. This remains a documentation
- *      gap — see the README + PR body.
+ *   - `fluent_cart/pdf/generate_receipt` — only ever invoked under FluentCart
+ *     **Pro** + FluentPDF (`OrderService::canGenerateReceiptPdf()` +
+ *     `defined('FLUENT_PDF')`), so the filter never fires on a free install and
+ *     suppressing it there is dead code. It is superseded below: suppressing the
+ *     receipt EMAIL also drops its PDF attachment on Pro (no email → no PDF),
+ *     so we no longer need a separate PDF guard.
+ *   - `fluent_cart/order_refunded` as an "observation point" — that callback was
+ *     a pure no-op (free core exposes no refund-PDF / refund-URL surface to
+ *     redirect), i.e. dead code, so it was deleted. See the limitation note below.
+ *
+ * What free core actually exposes and we wire:
+ *
+ *   1. Email suppression — `fluent_cart/should_send_email_notification`
+ *      (filter, EmailNotificationMailer::mailEmailsOfEvent). Returning `false`
+ *      skips one specific notification email. We suppress ONLY the customer
+ *      purchase-receipt/invoice mail (`order_paid_customer`, event `order_paid`)
+ *      for Vatly orders. That mail is the one whose subject is
+ *      "Purchase Receipt #{{order.invoice_no}}" and the only customer mail that
+ *      can carry the FluentCart PDF receipt attachment — exactly the competing
+ *      invoice we must not send. Refund / shipping / admin / subscription mails
+ *      are left untouched. VERIFIED.
+ *   2. Receipt-page invoice link — `fluent_cart/receipt/thank_you/after_order_items`
+ *      (action, ThankYouRender) fires while rendering the customer thank-you /
+ *      receipt page; we auto-render the Vatly invoice link. VERIFIED.
+ *
+ * ── Documented FluentCart limitation (architectural fact, not a TODO) ───────
+ * FluentCart (free 1.3.28) exposes no hook to block admin billing-detail edits
+ * or to redirect its refund PDF. For Vatly (MoR) orders these FluentCart-side
+ * artifacts remain FluentCart-local and non-authoritative — Vatly's invoice and
+ * credit note are the legal record of account. There is nothing to gate, so no
+ * dead handler is wired for them.
  *
  * Every callback re-checks `payment_method === 'vatly'` and is a strict no-op
  * for anything else.
@@ -55,6 +60,17 @@ final class MoRInvoiceGuard
 
     public const INVOICE_URL_META = '_vatly_invoice_url';
 
+    /**
+     * The single competing customer receipt/invoice email we suppress for Vatly
+     * orders. This is the FluentCart "Purchase receipt to customer" notification
+     * (event `order_paid`, subject "Purchase Receipt #{{order.invoice_no}}") — the
+     * only customer mail that doubles as FluentCart's own invoice and the only one
+     * that can attach FluentCart's PDF receipt. Verified against the notification
+     * registry: FluentCart free 1.3.28 —
+     * app/Services/Email/EmailNotifications.php:87 (`order_paid_customer`).
+     */
+    private const SUPPRESSED_MAIL_NAME = 'order_paid_customer';
+
     public function __construct(private ?InvoiceShortcodes $shortcodes = null)
     {
         $this->shortcodes = $shortcodes ?? new InvoiceShortcodes();
@@ -62,32 +78,59 @@ final class MoRInvoiceGuard
 
     public function register(): void
     {
-        // (1) Surface the Vatly invoice link in the customer-facing receipt.
-        // verified against FluentCart free v1.3.28 — ThankYouRender fires this
-        // action with the renderer $config array (contains the `order` Order).
+        // (1) Suppress FluentCart's own competing customer receipt/invoice email
+        // (and its PDF attachment) for Vatly orders. Returning false from this
+        // filter makes the mailer `continue` past that one notification.
+        // verified: FluentCart free 1.3.28 — app/Services/Email/EmailNotificationMailer.php:165
+        add_filter('fluent_cart/should_send_email_notification', [$this, 'suppressCompetingReceiptEmail'], 10, 2);
+
+        // (2) Surface the Vatly invoice link in the customer-facing receipt.
+        // verified: FluentCart free 1.3.28 — app/Services/Renderer/Receipt/ThankYouRender.php:162
+        // (ThankYouRender fires this action with the renderer $config array, which
+        // carries the `order` Order).
         add_action('fluent_cart/receipt/thank_you/after_order_items', [$this, 'renderReceiptInvoiceLink'], 10, 1);
-
-        // (2) Suppress FluentCart's own PDF invoice/receipt for Vatly orders.
-        // verified against FluentCart free v1.3.28 — single short-circuit filter
-        // used for both the email PDF attachment and the dashboard download.
-        // Only ever invoked under FluentCart Pro + FluentPDF; harmless no-op on
-        // free. Returning null aborts PDF generation for Vatly orders.
-        add_filter('fluent_cart/pdf/generate_receipt', [$this, 'suppressReceiptPdf'], 10, 2);
-
-        // (3) Refunds — observation point only. verified against FluentCart free
-        // v1.3.28 (action, single `$data` array arg). No free refund-PDF / URL
-        // filter exists to redirect, so this is a strict no-op that exists to
-        // keep the MoR intent documented at the real hook.
-        add_action('fluent_cart/order_refunded', [$this, 'onOrderRefunded'], 10, 1);
-
-        // (4) Billing-detail edits: NO free hook exists (see class docblock).
-        // The guessed `can_edit_billing` / `before_update_billing` filters were
-        // removed — they could never fire. Gating would require a FluentCart Pro
-        // / admin hook to be confirmed on a Pro install.
-        // FluentCart Pro / admin — needs verification on a Pro install.
     }
 
-    // ── (1) Customer-facing receipt invoice link ────────────────────────────
+    // ── (1) Competing receipt/invoice email suppression ─────────────────────
+
+    /**
+     * Suppress FluentCart's own customer purchase-receipt/invoice email for
+     * Vatly orders. Vatly is the Merchant of Record and issues the legal
+     * invoice, so FluentCart must not email a second, competing receipt (nor
+     * attach its own PDF receipt to it).
+     *
+     * Suppresses ONLY the `order_paid_customer` mail (subject
+     * "Purchase Receipt #{{order.invoice_no}}"). Every other notification —
+     * refunds, shipping, subscription, and all admin copies — passes through
+     * untouched. Returns the incoming `$send` for anything we don't suppress so
+     * we never accidentally silence an unrelated email.
+     *
+     * @param mixed                $send    Current send decision (bool) from core/other filters.
+     * @param array<string, mixed> $context `['event' => string, 'mail_name' => string, 'order' => Order]`.
+     * @return bool Whether FluentCart should send this notification.
+     */
+    public function suppressCompetingReceiptEmail($send, $context = null): bool
+    {
+        $send = (bool) $send;
+
+        if (! is_array($context)) {
+            return $send;
+        }
+
+        $mailName = $context['mail_name'] ?? null;
+        if ($mailName !== self::SUPPRESSED_MAIL_NAME) {
+            return $send;
+        }
+
+        if (! $this->isVatlyOrder($context['order'] ?? null)) {
+            return $send;
+        }
+
+        // Vatly order + competing receipt/invoice mail → do not send.
+        return false;
+    }
+
+    // ── (2) Customer-facing receipt invoice link ────────────────────────────
 
     /**
      * Auto-render the Vatly invoice link beneath the order items on the
@@ -128,53 +171,6 @@ final class MoRInvoiceGuard
         echo '<div class="vatly-receipt-invoice-link" style="margin-top:16px;">'
             . wp_kses_post($html)
             . '</div>';
-    }
-
-    // ── (2) Own PDF invoice / receipt suppression ───────────────────────────
-
-    /**
-     * Short-circuit FluentCart's PDF receipt/invoice generation for Vatly
-     * orders by returning null (no PDF). FluentCart treats a null/empty return
-     * as "no PDF generated" — so the email attachment and dashboard download
-     * are both skipped. Non-Vatly orders pass the existing value through.
-     *
-     * @param mixed $pdfPath Path resolved by core / Pro, or null.
-     * @param mixed $context `['order' => Order, 'template_id' => string]`.
-     * @return mixed
-     */
-    public function suppressReceiptPdf($pdfPath, $context = null)
-    {
-        $order = is_array($context) ? ($context['order'] ?? null) : null;
-
-        if (! $this->isVatlyOrder($order)) {
-            return $pdfPath;
-        }
-
-        return null;
-    }
-
-    // ── (3) Refund observation point ────────────────────────────────────────
-
-    /**
-     * Fires on `fluent_cart/order_refunded` for every refund. Strict no-op for
-     * non-Vatly orders. For Vatly refunds there is no free FluentCart refund-PDF
-     * or refund-invoice-URL surface to intercept — Vatly's credit note is
-     * canonical and surfaced via the Vatly portal — so this method intentionally
-     * does nothing beyond gating. It exists so the MoR intent is documented at
-     * the real, verified hook rather than a guessed one.
-     *
-     * @param mixed $data Refund event payload (`['order' => Order, ...]`).
-     */
-    public function onOrderRefunded($data = null): void
-    {
-        $order = is_array($data) ? ($data['order'] ?? null) : null;
-
-        if (! $this->isVatlyOrder($order)) {
-            return;
-        }
-
-        // No free suppression surface for refund PDFs; intentionally a no-op.
-        // The Vatly credit note is surfaced via the customer portal.
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

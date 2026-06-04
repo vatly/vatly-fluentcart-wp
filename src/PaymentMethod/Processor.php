@@ -34,7 +34,7 @@ final class Processor
 
         if (! $config->isConfigured()) {
             return [
-                'success' => false,
+                'status'  => 'failed',
                 'message' => __('Vatly is not configured. Set the API key and webhook secret in FluentCart > Settings > Payment Methods > Vatly.', 'vatly-for-fluentcart'),
             ];
         }
@@ -46,7 +46,7 @@ final class Processor
         try {
             $profile = $this->resolveCustomerProfile($order);
         } catch (Throwable $e) {
-            return ['success' => false, 'message' => $e->getMessage()];
+            return ['status' => 'failed', 'message' => $e->getMessage()];
         }
 
         $metadata = array_filter([
@@ -83,10 +83,10 @@ final class Processor
                     );
             }
         } catch (IncompleteInformationException $e) {
-            return ['success' => false, 'message' => $e->getMessage()];
+            return ['status' => 'failed', 'message' => $e->getMessage()];
         } catch (Throwable $e) {
             return [
-                'success' => false,
+                'status'  => 'failed',
                 /* translators: %s: error message returned by the Vatly API */
                 'message' => sprintf(__('Vatly checkout creation failed: %s', 'vatly-for-fluentcart'), $e->getMessage()),
             ];
@@ -94,10 +94,17 @@ final class Processor
 
         $transaction->fill(['vendor_charge_id' => $checkout->id])->save();
 
+        // FluentCart's checkout JS performs the hosted-checkout redirect off the
+        // `redirect_to` key when `status === 'success'`; `redirect_url` is NOT
+        // read on this place-order response path.
+        // verified: FluentCart free 1.3.28 — the place-order response handler in
+        // assets/ reads `status`/`redirect_to` (mirrors the COD gateway return in
+        // app/Modules/PaymentMethods/Cod/Cod.php:61-65).
         return [
-            'success'      => true,
-            'redirect_url' => $checkout->links->checkoutUrl->href,
-            'payment_id'   => $checkout->id,
+            'status'      => 'success',
+            'message'     => __('Redirecting to Vatly to complete your payment…', 'vatly-for-fluentcart'),
+            'redirect_to' => $checkout->links->checkoutUrl->href,
+            'payment_id'  => $checkout->id,
         ];
     }
 
@@ -225,9 +232,26 @@ final class Processor
         return $builder;
     }
 
+    /**
+     * Resolve the URL Vatly redirects the customer back to after hosted checkout.
+     *
+     * On success we land the customer on FluentCart's own receipt page —
+     * `OrderTransaction::getReceiptPageUrl()` (the same canonical landing the
+     * core PayPal/Stripe redirect gateways use). That page renders our
+     * MoR receipt invoice-link injection. There is no FluentCart
+     * `payment_redirect_url` order property in free 1.3.28, so the previous base
+     * (`$order->payment_redirect_url ?? home_url('/checkout/...')`) always fell
+     * through to a guessed `/checkout/<outcome>` path that isn't a real route.
+     *
+     * verified: FluentCart free 1.3.28 — app/Models/OrderTransaction.php:176
+     * (`getReceiptPageUrl()`), used as the post-payment `redirect_url` by
+     * app/Modules/PaymentMethods/PayPalGateway/PayPal.php:218.
+     */
     private function returnUrl(object $order, object $transaction, string $outcome): string
     {
-        $base = $order->payment_redirect_url ?? home_url('/checkout/' . $outcome);
+        $base = method_exists($transaction, 'getReceiptPageUrl')
+            ? (string) $transaction->getReceiptPageUrl()
+            : home_url('/');
 
         return add_query_arg([
             'fct_order_id' => $order->id,

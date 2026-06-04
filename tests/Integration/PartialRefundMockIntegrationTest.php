@@ -93,9 +93,9 @@ class PartialRefundMockIntegrationTest extends WP_UnitTestCase
 
         $result = $service->refund($transaction, 500, ['reason' => 'Customer changed mind']);
 
-        // --- Gateway contract: success array, partial amount recorded. ---
-        self::assertIsArray($result, 'Partial refund should succeed against the mock');
-        self::assertTrue($result['success']);
+        // --- Gateway contract: scalar vendor refund id back, partial amount recorded. ---
+        self::assertIsString($result, 'Partial refund should return the scalar vendor refund id');
+        self::assertStringStartsWith('refund_', $result);
 
         self::assertNotNull(Refund::$lastRecorded, 'A FluentCart refund must be recorded');
         [$recorded, $parent] = Refund::$lastRecorded;

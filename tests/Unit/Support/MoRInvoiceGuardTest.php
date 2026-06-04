@@ -16,9 +16,9 @@ use Vatly\FluentCart\Tests\TestCase;
  * `payment_method === 'vatly'` and be a strict no-op otherwise.
  *
  * Every hook wired by register() is verified against FluentCart free v1.3.28:
+ *   - fluent_cart/should_send_email_notification (filter) — suppress the
+ *     competing customer receipt/invoice email (order_paid_customer)
  *   - fluent_cart/receipt/thank_you/after_order_items (action) — receipt link
- *   - fluent_cart/pdf/generate_receipt (filter) — suppress own PDF
- *   - fluent_cart/order_refunded (action) — refund observation no-op
  *
  * This suite drives the callbacks directly and asserts the payment_method
  * gating + return/echo behaviour.
@@ -120,64 +120,84 @@ final class MoRInvoiceGuardTest extends TestCase
         self::assertSame('', (string) ob_get_clean());
     }
 
-    // ── (2) Own PDF invoice / receipt suppression ───────────────────────────
+    // ── (2) Competing receipt/invoice email suppression ─────────────────────
 
-    public function test_suppresses_receipt_pdf_only_for_vatly_orders(): void
+    public function test_suppresses_only_the_purchase_receipt_email_for_vatly_orders(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        // Vatly order → null (no PDF).
-        self::assertNull($guard->suppressReceiptPdf('/tmp/receipt.pdf', [
-            'order' => $this->order('vatly'),
-            'template_id' => 'order_receipt',
+        // Vatly order + the competing purchase-receipt mail → suppressed.
+        self::assertFalse($guard->suppressCompetingReceiptEmail(true, [
+            'event'     => 'order_paid',
+            'mail_name' => 'order_paid_customer',
+            'order'     => $this->order('vatly'),
         ]));
-
-        // Non-Vatly → existing value passed through untouched.
-        self::assertSame('/tmp/receipt.pdf', $guard->suppressReceiptPdf('/tmp/receipt.pdf', [
-            'order' => $this->order('stripe'),
-            'template_id' => 'order_receipt',
-        ]));
-
-        // Missing/mis-shaped context → passed through.
-        self::assertSame('/tmp/receipt.pdf', $guard->suppressReceiptPdf('/tmp/receipt.pdf', null));
     }
 
-    // ── (3) Refund observation point ────────────────────────────────────────
-
-    public function test_on_order_refunded_is_a_noop_and_does_not_throw(): void
+    public function test_does_not_suppress_purchase_receipt_for_non_vatly_orders(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        // Both branches are strict no-ops; assert they run without error.
-        $guard->onOrderRefunded(['order' => $this->order('vatly')]);
-        $guard->onOrderRefunded(['order' => $this->order('stripe')]);
-        $guard->onOrderRefunded(null);
+        self::assertTrue($guard->suppressCompetingReceiptEmail(true, [
+            'event'     => 'order_paid',
+            'mail_name' => 'order_paid_customer',
+            'order'     => $this->order('stripe'),
+        ]));
+    }
 
-        self::assertTrue(true);
+    public function test_does_not_suppress_unrelated_emails_for_vatly_orders(): void
+    {
+        $guard = new MoRInvoiceGuard();
+
+        // Refund, shipping, subscription and admin mails must pass through even
+        // for Vatly orders — we only ever silence order_paid_customer.
+        foreach (['order_refunded_customer', 'order_shipped_customer', 'order_paid_admin', 'subscription_renewal_customer'] as $mailName) {
+            self::assertTrue(
+                $guard->suppressCompetingReceiptEmail(true, [
+                    'mail_name' => $mailName,
+                    'order'     => $this->order('vatly'),
+                ]),
+                "Mail {$mailName} must not be suppressed for Vatly orders"
+            );
+        }
+    }
+
+    public function test_email_filter_preserves_existing_send_decision(): void
+    {
+        $guard = new MoRInvoiceGuard();
+
+        // If another filter already decided not to send, we keep that decision
+        // for mails we don't manage, and never resurrect a suppressed mail.
+        self::assertFalse($guard->suppressCompetingReceiptEmail(false, [
+            'mail_name' => 'order_refunded_customer',
+            'order'     => $this->order('vatly'),
+        ]));
+
+        // Mis-shaped context → pass the incoming decision through unchanged.
+        self::assertTrue($guard->suppressCompetingReceiptEmail(true, null));
+        self::assertFalse($guard->suppressCompetingReceiptEmail(false, null));
     }
 
     // ── register() wires only the verified hooks ────────────────────────────
 
-    public function test_register_wires_verified_receipt_and_refund_actions(): void
+    public function test_register_wires_verified_email_suppression_filter(): void
     {
-        Functions\expect('add_action')
+        Functions\expect('add_action')->once();
+        Functions\expect('add_filter')
             ->once()
-            ->with('fluent_cart/receipt/thank_you/after_order_items', \Mockery::type('array'), 10, 1);
-        Functions\expect('add_action')
-            ->once()
-            ->with('fluent_cart/order_refunded', \Mockery::type('array'), 10, 1);
+            ->with('fluent_cart/should_send_email_notification', \Mockery::type('array'), 10, 2);
 
         (new MoRInvoiceGuard())->register();
 
         $this->assertHookExpectations();
     }
 
-    public function test_register_wires_verified_pdf_suppression_filter(): void
+    public function test_register_wires_verified_receipt_link_action(): void
     {
-        Functions\expect('add_action')->twice();
-        Functions\expect('add_filter')
+        Functions\expect('add_filter')->once();
+        Functions\expect('add_action')
             ->once()
-            ->with('fluent_cart/pdf/generate_receipt', \Mockery::type('array'), 10, 2);
+            ->with('fluent_cart/receipt/thank_you/after_order_items', \Mockery::type('array'), 10, 1);
 
         (new MoRInvoiceGuard())->register();
 

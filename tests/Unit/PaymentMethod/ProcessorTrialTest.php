@@ -41,7 +41,7 @@ class ProcessorTrialTest extends TestCase
 
         $result = $this->process($builder, $subscription);
 
-        self::assertTrue($result['success']);
+        self::assertSame('success', $result['status']);
     }
 
     public function test_subscription_with_trial_ends_at_only_falls_back_to_with_trial_ends_at(): void
@@ -58,7 +58,7 @@ class ProcessorTrialTest extends TestCase
 
         $result = $this->process($builder, $subscription);
 
-        self::assertTrue($result['success']);
+        self::assertSame('success', $result['status']);
     }
 
     public function test_subscription_without_trial_sets_no_trial(): void
@@ -74,7 +74,7 @@ class ProcessorTrialTest extends TestCase
 
         $result = $this->process($builder, $subscription);
 
-        self::assertTrue($result['success']);
+        self::assertSame('success', $result['status']);
     }
 
     public function test_subscription_with_past_trial_ends_at_sets_no_trial(): void
@@ -90,7 +90,7 @@ class ProcessorTrialTest extends TestCase
 
         $result = $this->process($builder, $subscription);
 
-        self::assertTrue($result['success']);
+        self::assertSame('success', $result['status']);
     }
 
     /**
@@ -134,7 +134,6 @@ class ProcessorTrialTest extends TestCase
         $order->email = 'buyer@example.test';
         $order->customer_name = 'Buyer';
         $order->items = [(object) ['post_id' => 100, 'quantity' => 2]];
-        $order->payment_redirect_url = 'https://shop.test/return';
 
         $instance = new PaymentInstance();
         $instance->order = $order;
@@ -183,6 +182,11 @@ class ProcessorTrialTest extends TestCase
             public function save(): bool
             {
                 return true;
+            }
+
+            public function getReceiptPageUrl(bool $filtered = false): string
+            {
+                return 'https://shop.test/receipt';
             }
         };
     }
