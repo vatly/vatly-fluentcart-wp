@@ -301,6 +301,13 @@ class RefundServiceTest extends TestCase
         $vatlyProp->setAccessible(true);
         $vatlyProp->setValue($plugin, $vatly);
 
+        // RefundService selects its client via vatlyForTestmode($transaction's
+        // mode), so pre-seed the per-mode cache (both test and live) with the
+        // same mock — the tests assert on the API calls, not on key selection.
+        $byMode = $ref->getProperty('vatlyByMode');
+        $byMode->setAccessible(true);
+        $byMode->setValue($plugin, [0 => $vatly, 1 => $vatly]);
+
         return new RefundService($plugin);
     }
 }

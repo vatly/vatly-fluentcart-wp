@@ -42,6 +42,16 @@ final class Plugin
 
     private ?Vatly $vatly = null;
 
+    /**
+     * Mode-pinned Vatly instances, keyed by testmode bool. Built lazily for
+     * operations on existing records (refunds, webhook-driven ops) that must
+     * select the API key by the record's frozen mode rather than the current
+     * settings toggle.
+     *
+     * @var array<int, Vatly>
+     */
+    private array $vatlyByMode = [];
+
     private bool $booted = false;
 
     private function __construct() {}
@@ -165,14 +175,30 @@ final class Plugin
 
     public function vatly(): Vatly
     {
-        if ($this->vatly !== null) {
-            return $this->vatly;
-        }
+        return $this->vatly ??= $this->buildVatly($this->config());
+    }
 
+    /**
+     * A Vatly instance pinned to a specific test/live mode, regardless of the
+     * current settings toggle. Used for operations on EXISTING records — e.g.
+     * refunding an order that was paid in test mode while the gateway has since
+     * been flipped to live — so the API key matches the record, not the toggle.
+     *
+     * New checkouts still go through {@see self::vatly()} (settings mode).
+     */
+    public function vatlyForTestmode(bool $testmode): Vatly
+    {
+        return $this->vatlyByMode[(int) $testmode] ??= $this->buildVatly(
+            $this->config()->withTestmode($testmode)
+        );
+    }
+
+    private function buildVatly(VatlyConfig $config): Vatly
+    {
         $bindings = new FluentCartCustomerBindings();
 
-        return $this->vatly = new Vatly(new Wiring(
-            config:           $this->config(),
+        return new Vatly(new Wiring(
+            config:           $config,
             subscriptions:    new FluentCartSubscriptionRepository($this),
             orders:           new FluentCartOrderRepository($this),
             refunds:          new FluentCartRefundRepository(),

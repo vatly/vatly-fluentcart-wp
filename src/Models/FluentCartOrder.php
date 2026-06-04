@@ -55,4 +55,16 @@ final class FluentCartOrder implements OrderInterface
     {
         return ($this->transaction->status ?? null) === 'succeeded';
     }
+
+    /**
+     * Test vs live, read from FluentCart's own per-transaction `payment_mode`
+     * (frozen at checkout). This is the authoritative local mode — Vatly's
+     * `testmode` on the webhook matches it — so refunds and other follow-up
+     * operations select the API key by the record's mode, not the current
+     * settings toggle.
+     */
+    public function isTestmode(): bool
+    {
+        return ($this->transaction->payment_mode ?? null) === 'test';
+    }
 }

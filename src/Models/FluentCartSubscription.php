@@ -84,4 +84,13 @@ final class FluentCartSubscription implements SubscriptionInterface
     {
         return null;
     }
+
+    /**
+     * Test vs live, read from FluentCart's per-subscription `payment_mode`
+     * (frozen at checkout). Matches Vatly's `testmode` on the subscription.
+     */
+    public function isTestmode(): bool
+    {
+        return ($this->subscription->payment_mode ?? null) === 'test';
+    }
 }

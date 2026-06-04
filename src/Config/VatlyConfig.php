@@ -21,6 +21,26 @@ final class VatlyConfig implements ConfigurationInterface
     /** @var array<string, mixed>|null */
     private ?array $settings = null;
 
+    /**
+     * When set, overrides the settings-derived mode. Used by
+     * {@see \Vatly\FluentCart\Plugin::vatlyForTestmode()} to pin a client to
+     * the mode a given record was created in, so the matching API key/secret
+     * are selected regardless of the current settings toggle.
+     */
+    private ?bool $testmodeOverride = null;
+
+    /**
+     * Return a copy pinned to an explicit test/live mode. Immutable — the
+     * shared, settings-backed instance is left untouched.
+     */
+    public function withTestmode(bool $testmode): self
+    {
+        $clone = clone $this;
+        $clone->testmodeOverride = $testmode;
+
+        return $clone;
+    }
+
     public function getApiKey(): string
     {
         return $this->isTestmode()
@@ -49,6 +69,10 @@ final class VatlyConfig implements ConfigurationInterface
 
     public function isTestmode(): bool
     {
+        if ($this->testmodeOverride !== null) {
+            return $this->testmodeOverride;
+        }
+
         return ($this->get('payment_mode') ?: 'test') === 'test';
     }
 

@@ -9,6 +9,7 @@ use FluentCart\App\Services\Payments\Refund;
 use Throwable;
 use Vatly\API\Resources\Order;
 use Vatly\API\Types\RefundStatus as VatlyRefundStatus;
+use Vatly\API\VatlyApiClient;
 use Vatly\FluentCart\Plugin;
 use WP_Error;
 
@@ -55,6 +56,20 @@ final class RefundService
     public function __construct(private Plugin $plugin) {}
 
     /**
+     * Resolve the Vatly API client pinned to the transaction's *own* test/live
+     * mode (frozen at checkout in FluentCart's `payment_mode`), so a refund on
+     * an old test order keeps hitting the test key even if the gateway has
+     * since been flipped to live — and vice versa. Falls back to live when the
+     * transaction carries no mode.
+     */
+    private function apiClientFor(OrderTransaction $transaction): VatlyApiClient
+    {
+        $testmode = ($transaction->payment_mode ?? null) === 'test';
+
+        return $this->plugin->vatlyForTestmode($testmode)->getApiClient();
+    }
+
+    /**
      * @param int                  $amount  Refund amount in cents. 0 means full refund.
      * @param array<string, mixed> $args    Optional: reason.
      *
@@ -85,7 +100,7 @@ final class RefundService
         $payload = $metadata !== [] ? ['metadata' => $metadata] : [];
 
         try {
-            $refund = $this->plugin->vatly()->getApiClient()->orderRefunds->createFullRefundForOrderId(
+            $refund = $this->apiClientFor($transaction)->orderRefunds->createFullRefundForOrderId(
                 (string) $vatlyOrderId,
                 $payload
             );
@@ -133,7 +148,7 @@ final class RefundService
     private function partialRefund(OrderTransaction $transaction, string $vatlyOrderId, int $amount, array $args)
     {
         try {
-            $order = $this->plugin->vatly()->getApiClient()->orders->get($vatlyOrderId);
+            $order = $this->apiClientFor($transaction)->orders->get($vatlyOrderId);
         } catch (Throwable $e) {
             return new WP_Error(
                 'vatly_refund_api_failed',
@@ -174,7 +189,7 @@ final class RefundService
         }
 
         try {
-            $refund = $this->plugin->vatly()->getApiClient()->orderRefunds->createForOrderId(
+            $refund = $this->apiClientFor($transaction)->orderRefunds->createForOrderId(
                 $vatlyOrderId,
                 ['items' => [$item]]
             );

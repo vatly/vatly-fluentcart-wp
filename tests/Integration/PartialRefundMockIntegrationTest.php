@@ -152,6 +152,12 @@ class PartialRefundMockIntegrationTest extends WP_UnitTestCase
         $vatlyProp->setAccessible(true);
         $vatlyProp->setValue($plugin, $vatly);
 
+        // RefundService now resolves its client via vatlyForTestmode($txn mode),
+        // so point both per-mode slots at the same mock-backed Vatly instance.
+        $byMode = $ref->getProperty('vatlyByMode');
+        $byMode->setAccessible(true);
+        $byMode->setValue($plugin, [0 => $vatly, 1 => $vatly]);
+
         return new RefundService($plugin);
     }
 
