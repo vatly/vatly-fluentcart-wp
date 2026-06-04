@@ -1,0 +1,313 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs of the same workflow on the same branch so PRs don't
+# pile up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Composer validate + audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      # `--abandoned=report` keeps abandoned-package warnings visible but
+      # doesn't fail the build (those come from upstream phpunit transitively).
+      # Dev deps are audited by default — there's no opt-in flag, and passing
+      # `--no-dev` would *exclude* them.
+      - name: Composer audit
+        run: composer audit --abandoned=report
+
+  lint:
+    name: PHP lint (${{ matrix.php }})
+    runs-on: ubuntu-latest
+    needs: validate
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint plugin sources
+        run: |
+          find src vatly-for-fluentcart.php -type f -name '*.php' -print0 \
+            | xargs -0 -n1 -P4 php -l
+
+  static-analysis:
+    name: PHPStan
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: dom, curl, libxml, mbstring, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-static-${{ hashFiles('composer.lock') }}
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Run PHPStan
+        run: composer analyse -- --no-progress
+
+  cs:
+    name: WPCS
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2, cs2pr
+
+      - run: composer install --no-interaction --prefer-dist
+
+      # `-q` suppresses the progress bar + timing footer that PHPCS would
+      # otherwise interleave with the checkstyle XML, which cs2pr can't parse.
+      - name: WPCS
+        run: composer phpcs -- -q --report=checkstyle | cs2pr
+
+  tests:
+    name: PHPUnit unit (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    needs: validate
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.lock') }}
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: PHPUnit unit suite
+        run: composer test:unit
+
+  wp-integration:
+    name: WP ${{ matrix.wp }} / PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        # PHP 8.1 is the floor (fluent v0.8) — 6.5 is the first WP release
+        # whose test scaffold loads cleanly on 8.1 without backports.
+        # `trunk` is forward-looking and allowed to fail.
+        include:
+          - { wp: '6.5', php: '8.1', allow_failure: false }
+          - { wp: 'latest', php: '8.3', allow_failure: false }
+          - { wp: 'trunk', php: '8.3', allow_failure: true }
+    continue-on-error: ${{ matrix.allow_failure }}
+
+    services:
+      mysql:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      WP_TESTS_DIR: /tmp/wordpress-tests-lib
+      WP_CORE_DIR: /tmp/wordpress
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, mbstring, intl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install plugin deps
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install subversion (needed for WP test scaffold)
+        run: sudo apt-get update && sudo apt-get install -y subversion
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h127.0.0.1 -uroot -proot --silent; then
+              echo "MySQL is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "MySQL did not come up in time"; exit 1
+
+      # Downloads matching WP core + test scaffold for the matrix slot's
+      # WP version, then creates the wordpress_test DB. WP-version-pinned
+      # scaffolding is the key — wp-phpunit on packagist only ships one
+      # version per release, and that doesn't generalise across the matrix.
+      - name: Install WP ${{ matrix.wp }} test environment
+        run: bin/install-wp-tests.sh wordpress_test root root 127.0.0.1 ${{ matrix.wp }}
+
+      - name: PHPUnit integration suite
+        run: composer test:integration
+
+  docker-build:
+    name: Docker smoke build
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build mock-vatly image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker/mock-vatly
+          push: false
+
+      - name: Build WordPress image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile.wp
+          push: false
+
+  release-build:
+    name: Release zip smoke build
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Build scoped release zip
+        run: bin/build-release.sh
+
+      # Same invariants the release workflow checks — catch scoper config
+      # regressions on every PR instead of at tag-cut time.
+      - name: Verify scoped output
+        run: |
+          set -e
+          SCOPED="build/scoped/vatly-for-fluentcart"
+
+          # Our own namespace stays unprefixed — php-scoper treats it as a
+          # parent of the prefix path (`Vatly\FluentCart\Vendor`) and leaves
+          # it alone, which is what the bootstrap file relies on.
+          grep -q "^namespace Vatly\\\\FluentCart;" "${SCOPED}/src/Plugin.php"
+
+          # Third-party deps from vatly-fluent-php DO get prefixed — and our
+          # Plugin.php's use statements should now point at the scoped paths.
+          grep -q "use Vatly\\\\FluentCart\\\\Vendor\\\\Vatly\\\\Fluent\\\\" "${SCOPED}/src/Plugin.php"
+
+          # composer/ca-bundle is the canonical example of a transitive dep
+          # we MUST prefix so we don't collide with whatever other plugins
+          # ship.
+          grep -q "^namespace Vatly\\\\FluentCart\\\\Vendor\\\\Composer\\\\CaBundle;" \
+            "${SCOPED}/vendor/composer/ca-bundle/src/CaBundle.php"
+
+          # FluentCart's own classes MUST NOT get prefixed — the live plugin
+          # ships them at the canonical path, and our VatlyGateway extends
+          # AbstractPaymentGateway by exactly that unprefixed name.
+          grep -q "^use FluentCart\\\\App\\\\Modules\\\\PaymentMethods\\\\Core\\\\AbstractPaymentGateway;" \
+            "${SCOPED}/src/PaymentMethod/VatlyGateway.php"
+
+          test -f "${SCOPED}/vendor/autoload.php"
+
+          # Sanity-check the classmap got populated with prefixed entries.
+          # The current floor (~180) is well above what we'd ever expect to
+          # see if a vendored package were silently dropped.
+          test "$(grep -c "Vatly\\\\\\\\FluentCart\\\\\\\\Vendor" "${SCOPED}/vendor/composer/autoload_classmap.php")" -ge 100
+
+          # Composer's own runtime helpers MUST be reachable by their bare
+          # names — the WordPress ecosystem (Symfony, Monolog, Guzzle, …)
+          # introspects these at startup. A scoper regression that prefixes
+          # them produces hard-to-diagnose "cannot redeclare" fatals at
+          # activation time on multi-plugin sites.
+          php -r '
+            require "'"${SCOPED}"'/vendor/autoload.php";
+            foreach ([
+              "Composer\\InstalledVersions",
+              "Composer\\Autoload\\ClassLoader",
+              "Vatly\\FluentCart\\Plugin",
+              "Vatly\\FluentCart\\Vendor\\Vatly\\Fluent\\Vatly",
+              "Vatly\\FluentCart\\Vendor\\Composer\\CaBundle\\CaBundle",
+            ] as $class) {
+              if (! class_exists($class)) {
+                fwrite(STDERR, "Expected class not found: $class\n");
+                exit(1);
+              }
+            }
+            \Composer\InstalledVersions::getRootPackage();
+            echo "Loadability smoke test: OK\n";
+          '
+
+      - name: Upload zip as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vatly-for-fluentcart-release-zip
+          path: build/vatly-for-fluentcart.zip
+          retention-days: 14

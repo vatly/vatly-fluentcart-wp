@@ -1,0 +1,57 @@
+{
+    "name": "vatly/vatly-for-fluentcart",
+    "description": "Vatly Merchant-of-Record payment gateway for FluentCart",
+    "type": "wordpress-plugin",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Sander van Hooft",
+            "email": "sander@vanhooft.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "vatly/vatly-fluent-php": "^0.8.0-alpha.20"
+    },
+    "require-dev": {
+        "brain/monkey": "^2.6",
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "mockery/mockery": "^1.6",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^9.6",
+        "szepeviktor/phpstan-wordpress": "^2.0",
+        "wp-coding-standards/wpcs": "^3.0",
+        "yoast/phpunit-polyfills": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Vatly\\FluentCart\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Vatly\\FluentCart\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "analyse": "phpstan analyse --memory-limit=512M",
+        "phpcs": "phpcs",
+        "phpcbf": "phpcbf",
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite=unit",
+        "test:integration": "phpunit -c phpunit-integration.xml.dist"
+    },
+    "config": {
+        "sort-packages": true,
+        "platform": {
+            "php": "8.1"
+        },
+        "allow-plugins": {
+            "composer/installers": true,
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

@@ -1,0 +1,9 @@
+/vendor/
+/build/
+.phpunit.cache/
+.phpunit.result.cache
+.phpcs.cache
+/.idea/
+/.vscode/
+.DS_Store
+.claude/
