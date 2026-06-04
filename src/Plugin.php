@@ -64,13 +64,15 @@ final class Plugin
         (new SubscriptionController($this))->register();
 
         // Merchant-of-Record invoicing (#5/#6). Vatly issues the legal invoice
-        // and credit note, so we surface Vatly's invoice link via shortcodes and
-        // suppress FluentCart's own competing invoice/credit-note + billing edits
-        // for Vatly-paid orders. Registered on every request (not admin-only)
-        // because the shortcodes render in customer-facing receipts/emails and
-        // the guard's email/dashboard filters fire on the frontend too.
-        (new InvoiceShortcodes())->register();
-        (new MoRInvoiceGuard())->register();
+        // and credit note, so we surface Vatly's invoice link in the customer
+        // receipt (and via shortcodes) and suppress FluentCart's own competing
+        // PDF invoice/receipt for Vatly-paid orders. Registered on every request
+        // (not admin-only) because the shortcodes + receipt action render in
+        // customer-facing receipts/emails. The guard reuses the shortcode
+        // renderer for the auto-injected receipt link.
+        $invoiceShortcodes = new InvoiceShortcodes();
+        $invoiceShortcodes->register();
+        (new MoRInvoiceGuard($invoiceShortcodes))->register();
 
         if (is_admin()) {
             (new ProductMetaBox())->register();

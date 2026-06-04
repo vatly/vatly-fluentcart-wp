@@ -50,6 +50,7 @@ abstract class TestCase extends PhpUnitTestCase
         Monkey\Functions\when('esc_attr')->returnArg(1);
         Monkey\Functions\when('esc_url_raw')->returnArg(1);
         Monkey\Functions\when('esc_html')->returnArg(1);
+        Monkey\Functions\when('wp_kses_post')->returnArg(1);
         Monkey\Functions\when('sanitize_text_field')->returnArg(1);
         Monkey\Functions\when('wp_unslash')->returnArg(1);
         Monkey\Functions\when('absint')->alias(static fn($v) => abs((int) $v));

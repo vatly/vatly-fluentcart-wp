@@ -7,18 +7,21 @@ namespace Vatly\FluentCart\Tests\Unit\Support;
 use Brain\Monkey\Functions;
 use FluentCart\App\Builder;
 use FluentCart\App\Models\Order;
-use FluentCart\App\Models\Refund;
+use Vatly\FluentCart\Support\InvoiceShortcodes;
 use Vatly\FluentCart\Support\MoRInvoiceGuard;
 use Vatly\FluentCart\Tests\TestCase;
 
 /**
- * Issue #6: every MoR-guard callback must be a strict no-op for non-Vatly
- * orders (return its input unchanged) and only suppress / redirect for orders
- * whose `payment_method === 'vatly'`.
+ * Issue #6: the MoR guard must only ever act on orders whose
+ * `payment_method === 'vatly'` and be a strict no-op otherwise.
  *
- * The hooks are wired in register(); FluentCart's exact hook names are
- * unverified, so this suite drives the callbacks directly and asserts the
- * payment_method gating + return values rather than relying on the hook names.
+ * Every hook wired by register() is verified against FluentCart free v1.3.28:
+ *   - fluent_cart/receipt/thank_you/after_order_items (action) — receipt link
+ *   - fluent_cart/pdf/generate_receipt (filter) — suppress own PDF
+ *   - fluent_cart/order_refunded (action) — refund observation no-op
+ *
+ * This suite drives the callbacks directly and asserts the payment_method
+ * gating + return/echo behaviour.
  *
  * @covers \Vatly\FluentCart\Support\MoRInvoiceGuard
  */
@@ -28,6 +31,16 @@ final class MoRInvoiceGuardTest extends TestCase
     {
         parent::setUp();
         Builder::reset();
+
+        // The receipt-link path reuses InvoiceShortcodes, which needs these.
+        Functions\when('shortcode_atts')->alias(
+            static function (array $defaults, $atts): array {
+                $atts = is_array($atts) ? $atts : [];
+
+                return array_merge($defaults, array_intersect_key($atts, $defaults));
+            }
+        );
+        Functions\when('esc_url')->returnArg(1);
     }
 
     protected function tearDown(): void
@@ -36,10 +49,10 @@ final class MoRInvoiceGuardTest extends TestCase
         parent::tearDown();
     }
 
-    private function order(string $paymentMethod): Order
+    private function order(string $paymentMethod, int $id = 1): Order
     {
         $order = new Order();
-        $order->id = 1;
+        $order->id = $id;
         $order->payment_method = $paymentMethod;
 
         return $order;
@@ -66,142 +79,124 @@ final class MoRInvoiceGuardTest extends TestCase
         self::assertFalse($guard->isVatlyOrder(42));
     }
 
-    // ── (1) Invoice attachment suppression ──────────────────────────────────
+    // ── (1) Customer-facing receipt invoice link ────────────────────────────
 
-    public function test_suppresses_invoice_attachment_only_for_vatly_orders(): void
+    public function test_receipt_link_renders_button_for_vatly_orders(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        self::assertFalse($guard->suppressInvoiceAttachment(true, $this->order('vatly')));
-        self::assertTrue($guard->suppressInvoiceAttachment(true, $this->order('stripe')));
-        self::assertFalse($guard->suppressInvoiceAttachment(false, $this->order('stripe')));
-    }
-
-    public function test_strips_invoice_attachments_only_for_vatly_orders(): void
-    {
-        $guard = new MoRInvoiceGuard();
-
-        $attachments = [
-            ['path' => '/tmp/invoice-123.pdf'],
-            ['path' => '/tmp/manual.pdf'],
-        ];
-
-        $vatly = $guard->stripInvoiceAttachments($attachments, $this->order('vatly'));
-        self::assertCount(1, $vatly);
-        self::assertSame('/tmp/manual.pdf', $vatly[0]['path']);
-
-        // Non-Vatly: untouched.
-        self::assertSame($attachments, $guard->stripInvoiceAttachments($attachments, $this->order('stripe')));
-
-        // Non-array input: passed through.
-        self::assertNull($guard->stripInvoiceAttachments(null, $this->order('vatly')));
-    }
-
-    // ── (2) Own-invoice download link suppression / redirect ────────────────
-
-    public function test_redirects_invoice_download_url_to_vatly_for_vatly_orders(): void
-    {
-        $guard = new MoRInvoiceGuard();
-
-        $order = $this->order('vatly');
+        $order = $this->order('vatly', 7);
         $order->updateMeta('_vatly_invoice_url', 'https://vatly.test/invoice/abc');
 
-        self::assertSame(
-            'https://vatly.test/invoice/abc',
-            $guard->redirectInvoiceDownloadUrl('https://fluentcart.test/own.pdf', $order)
-        );
+        // The shortcode renderer resolves the order via Order::query()->find().
+        Builder::$nextResults = [$order];
 
-        // No stamped URL → keep FluentCart's own URL.
-        self::assertSame(
-            'https://fluentcart.test/own.pdf',
-            $guard->redirectInvoiceDownloadUrl('https://fluentcart.test/own.pdf', $this->order('vatly'))
-        );
+        ob_start();
+        $guard->renderReceiptInvoiceLink(['order' => $order]);
+        $html = (string) ob_get_clean();
 
-        // Non-Vatly → untouched.
-        self::assertSame(
-            'https://fluentcart.test/own.pdf',
-            $guard->redirectInvoiceDownloadUrl('https://fluentcart.test/own.pdf', $this->order('stripe'))
-        );
+        self::assertStringContainsString('vatly-receipt-invoice-link', $html);
+        self::assertStringContainsString('href="https://vatly.test/invoice/abc"', $html);
     }
 
-    public function test_denies_own_invoice_download_only_for_vatly_orders(): void
+    public function test_receipt_link_is_silent_for_non_vatly_orders(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        self::assertFalse($guard->denyOwnInvoiceDownload(true, $this->order('vatly')));
-        self::assertTrue($guard->denyOwnInvoiceDownload(true, $this->order('stripe')));
+        ob_start();
+        $guard->renderReceiptInvoiceLink(['order' => $this->order('stripe', 7)]);
+        self::assertSame('', (string) ob_get_clean());
     }
 
-    // ── (3) Billing-edit routing ────────────────────────────────────────────
-
-    public function test_blocks_billing_edit_only_for_vatly_orders(): void
+    public function test_receipt_link_is_silent_when_no_invoice_url(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        self::assertFalse($guard->blockBillingEdit(true, $this->order('vatly')));
-        self::assertTrue($guard->blockBillingEdit(true, $this->order('stripe')));
+        $order = $this->order('vatly', 7); // no _vatly_invoice_url meta
+        Builder::$nextResults = [$order];
+
+        ob_start();
+        $guard->renderReceiptInvoiceLink(['order' => $order]);
+        self::assertSame('', (string) ob_get_clean());
     }
 
-    public function test_billing_update_returns_wp_error_for_vatly_orders(): void
+    // ── (2) Own PDF invoice / receipt suppression ───────────────────────────
+
+    public function test_suppresses_receipt_pdf_only_for_vatly_orders(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        $result = $guard->blockBillingUpdate(true, $this->order('vatly'));
-        self::assertInstanceOf(\WP_Error::class, $result);
-        self::assertSame('vatly_mor_billing_locked', $result->get_error_code());
+        // Vatly order → null (no PDF).
+        self::assertNull($guard->suppressReceiptPdf('/tmp/receipt.pdf', [
+            'order' => $this->order('vatly'),
+            'template_id' => 'order_receipt',
+        ]));
 
-        // Non-Vatly → original result passed through.
-        self::assertTrue($guard->blockBillingUpdate(true, $this->order('stripe')));
+        // Non-Vatly → existing value passed through untouched.
+        self::assertSame('/tmp/receipt.pdf', $guard->suppressReceiptPdf('/tmp/receipt.pdf', [
+            'order' => $this->order('stripe'),
+            'template_id' => 'order_receipt',
+        ]));
+
+        // Missing/mis-shaped context → passed through.
+        self::assertSame('/tmp/receipt.pdf', $guard->suppressReceiptPdf('/tmp/receipt.pdf', null));
     }
 
-    // ── (4) Refund credit-note suppression / redirect ───────────────────────
+    // ── (3) Refund observation point ────────────────────────────────────────
 
-    public function test_suppresses_refund_invoice_attachment_only_for_vatly_orders(): void
+    public function test_on_order_refunded_is_a_noop_and_does_not_throw(): void
     {
         $guard = new MoRInvoiceGuard();
 
-        self::assertFalse($guard->suppressRefundInvoiceAttachment(true, $this->order('vatly')));
-        self::assertTrue($guard->suppressRefundInvoiceAttachment(true, $this->order('stripe')));
+        // Both branches are strict no-ops; assert they run without error.
+        $guard->onOrderRefunded(['order' => $this->order('vatly')]);
+        $guard->onOrderRefunded(['order' => $this->order('stripe')]);
+        $guard->onOrderRefunded(null);
+
+        self::assertTrue(true);
     }
 
-    public function test_redirects_refund_invoice_url_to_vatly_credit_note(): void
+    // ── register() wires only the verified hooks ────────────────────────────
+
+    public function test_register_wires_verified_receipt_and_refund_actions(): void
     {
-        $guard = new MoRInvoiceGuard();
-
-        $refund = new Refund();
-        $refund->payment_method = 'vatly';
-        $refund->updateMeta('_vatly_credit_note_url', 'https://vatly.test/credit-note/xyz');
-
-        self::assertSame(
-            'https://vatly.test/credit-note/xyz',
-            $guard->redirectRefundInvoiceDownloadUrl('https://fluentcart.test/refund.pdf', $refund)
-        );
-
-        // Vatly refund without stamped credit note → keep FluentCart's URL.
-        $bare = new Refund();
-        $bare->payment_method = 'vatly';
-        self::assertSame(
-            'https://fluentcart.test/refund.pdf',
-            $guard->redirectRefundInvoiceDownloadUrl('https://fluentcart.test/refund.pdf', $bare)
-        );
-
-        // Non-Vatly refund → untouched.
-        $stripe = new Refund();
-        $stripe->payment_method = 'stripe';
-        self::assertSame(
-            'https://fluentcart.test/refund.pdf',
-            $guard->redirectRefundInvoiceDownloadUrl('https://fluentcart.test/refund.pdf', $stripe)
-        );
-    }
-
-    // ── register() wires the documented hook names ──────────────────────────
-
-    public function test_register_adds_all_guard_filters(): void
-    {
-        Functions\expect('add_filter')->times(8);
+        Functions\expect('add_action')
+            ->once()
+            ->with('fluent_cart/receipt/thank_you/after_order_items', \Mockery::type('array'), 10, 1);
+        Functions\expect('add_action')
+            ->once()
+            ->with('fluent_cart/order_refunded', \Mockery::type('array'), 10, 1);
 
         (new MoRInvoiceGuard())->register();
 
         $this->assertHookExpectations();
+    }
+
+    public function test_register_wires_verified_pdf_suppression_filter(): void
+    {
+        Functions\expect('add_action')->twice();
+        Functions\expect('add_filter')
+            ->once()
+            ->with('fluent_cart/pdf/generate_receipt', \Mockery::type('array'), 10, 2);
+
+        (new MoRInvoiceGuard())->register();
+
+        $this->assertHookExpectations();
+    }
+
+    public function test_guard_reuses_injected_shortcode_renderer(): void
+    {
+        $shortcodes = new InvoiceShortcodes();
+        $guard = new MoRInvoiceGuard($shortcodes);
+
+        $order = $this->order('vatly', 9);
+        $order->updateMeta('_vatly_invoice_url', 'https://vatly.test/invoice/shared');
+        Builder::$nextResults = [$order];
+
+        ob_start();
+        $guard->renderReceiptInvoiceLink(['order' => $order]);
+        $html = (string) ob_get_clean();
+
+        self::assertStringContainsString('href="https://vatly.test/invoice/shared"', $html);
     }
 }
