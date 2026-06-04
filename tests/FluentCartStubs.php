@@ -217,6 +217,7 @@ namespace FluentCart\App\Models {
         public ?string $vendor_customer_id = null;
         public ?string $vendor_plan_id = null;
         public ?string $payment_method = null;
+        public ?string $payment_mode = null;
         public ?string $status = null;
         public ?int $quantity = null;
         public ?string $subscription_type = null;

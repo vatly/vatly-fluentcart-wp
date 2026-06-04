@@ -29,6 +29,7 @@ class FluentCartRefundRepositoryTest extends TestCase
             status: 'refunded',
             total: 500,
             currency: 'EUR',
+            testmode: true,
         ));
 
         self::assertNull($result);

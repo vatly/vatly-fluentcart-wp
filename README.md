@@ -90,6 +90,16 @@ Vatly's refund API is asynchronous: the local FluentCart refund is recorded with
 Vatly's initial status (usually `pending`) and moves to `refunded` once Vatly
 confirms the payout.
 
+### Test vs live (per-record mode)
+
+Each FluentCart transaction freezes its `payment_mode` (test/live) at checkout.
+Refunds — and any other operation on an *existing* record — select the Vatly
+API key by **that record's mode**, not the current gateway settings toggle. So
+flipping the gateway from test to live (or back) doesn't make an old test
+order's refund hit the live key. New checkouts still use the settings mode. The
+mode is surfaced per record via `isTestmode()` on the Vatly order / subscription
+/ refund wrappers.
+
 ## Development
 
 ```bash

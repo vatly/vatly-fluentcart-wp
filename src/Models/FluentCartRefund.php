@@ -55,4 +55,14 @@ final class FluentCartRefund implements RefundInterface
     {
         return ($this->refund->status ?? null) === 'refunded';
     }
+
+    /**
+     * Test vs live, read from FluentCart's per-refund `payment_mode` (carried
+     * over from the parent transaction at refund-creation time — see
+     * {@see \Vatly\FluentCart\PaymentMethod\RefundService}).
+     */
+    public function isTestmode(): bool
+    {
+        return ($this->refund->payment_mode ?? null) === 'test';
+    }
 }

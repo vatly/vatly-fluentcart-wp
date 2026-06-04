@@ -76,6 +76,7 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
                     status:         $data->status,
                     total:          $data->total,
                     currency:       $data->currency,
+                    testmode:       $data->testmode,
                     invoiceNumber:  $data->invoiceNumber,
                     paymentMethod:  $data->paymentMethod,
                     subtotal:       $data->subtotal,
@@ -252,6 +253,7 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         $transaction->currency         = $data->currency;
         $transaction->invoice_number   = $data->invoiceNumber;
         $transaction->payment_method   = 'vatly';
+        $transaction->payment_mode     = $data->testmode ? 'test' : 'live';
 
         return new FluentCartOrder($transaction);
     }

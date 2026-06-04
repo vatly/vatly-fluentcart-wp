@@ -156,6 +156,7 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
         $row->vendor_plan_id         = $data->planId;
         $row->item_name              = $data->name;
         $row->quantity               = $data->quantity;
+        $row->payment_mode           = $data->testmode ? 'test' : 'live';
         $row->status                 = 'orphaned';
 
         return new FluentCartSubscription($row);

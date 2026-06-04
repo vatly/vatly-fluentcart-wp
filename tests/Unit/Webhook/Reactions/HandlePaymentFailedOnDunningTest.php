@@ -53,6 +53,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
             taxSummary: new TaxSummaryCollection([]),
             invoiceNumber: null,
             paymentMethod: 'card',
+            testmode: false,
             metadata: $metadata,
         );
     }
