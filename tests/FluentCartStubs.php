@@ -142,11 +142,16 @@ namespace FluentCart\App\Models {
     class Order
     {
         public int $id;
+        public ?string $payment_method = null;
+        /** @var array<string, mixed> in-memory mirror of FluentCart's order meta — phpunit-only */
+        public array $meta = [];
 
         /** @return Builder<self> */
         public static function query(): Builder { return new Builder(); }
 
-        public function updateMeta(string $key, string $value): void {}
+        public function updateMeta(string $key, string $value): void { $this->meta[$key] = $value; }
+
+        public function getMeta(string $key, mixed $default = null): mixed { return $this->meta[$key] ?? $default; }
     }
 
     class OrderTransaction
@@ -186,6 +191,8 @@ namespace FluentCart\App\Models {
         public ?string $payment_method = null;
         public ?string $payment_mode = null;
         public ?int $parent_transaction_id = null;
+        /** @var array<string, mixed> in-memory mirror of FluentCart's refund meta — phpunit-only */
+        public array $meta = [];
 
         /** @return Builder<self> */
         public static function query(): Builder { return new Builder(); }
@@ -195,7 +202,9 @@ namespace FluentCart\App\Models {
 
         public function save(): bool { return true; }
 
-        public function updateMeta(string $key, string $value): void {}
+        public function updateMeta(string $key, string $value): void { $this->meta[$key] = $value; }
+
+        public function getMeta(string $key, mixed $default = null): mixed { return $this->meta[$key] ?? $default; }
     }
 
     class Subscription

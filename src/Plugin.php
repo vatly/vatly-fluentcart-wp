@@ -16,6 +16,8 @@ use Vatly\FluentCart\Repositories\FluentCartOrderRepository;
 use Vatly\FluentCart\Repositories\FluentCartRefundRepository;
 use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
+use Vatly\FluentCart\Support\InvoiceShortcodes;
+use Vatly\FluentCart\Support\MoRInvoiceGuard;
 use Vatly\FluentCart\Webhook\EventDispatcher;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReceived;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReversed;
@@ -60,6 +62,15 @@ final class Plugin
         add_action('fluent_cart/payments/subscription_canceled', [$this, 'propagateCancellation'], 10, 1);
 
         (new SubscriptionController($this))->register();
+
+        // Merchant-of-Record invoicing (#5/#6). Vatly issues the legal invoice
+        // and credit note, so we surface Vatly's invoice link via shortcodes and
+        // suppress FluentCart's own competing invoice/credit-note + billing edits
+        // for Vatly-paid orders. Registered on every request (not admin-only)
+        // because the shortcodes render in customer-facing receipts/emails and
+        // the guard's email/dashboard filters fire on the frontend too.
+        (new InvoiceShortcodes())->register();
+        (new MoRInvoiceGuard())->register();
 
         if (is_admin()) {
             (new ProductMetaBox())->register();
