@@ -54,8 +54,8 @@ class RefundServiceTest extends TestCase
         // amount 0 → full refund.
         $result  = $service->refund($this->transaction('order_abc', 2300), 0);
 
-        self::assertIsArray($result);
-        self::assertTrue($result['success']);
+        // Contract: scalar vendor refund id back to FluentCart.
+        self::assertSame('refund_1', $result);
         self::assertSame([
             'vendor_charge_id' => 'refund_1',
             'payment_method'   => 'vatly',
@@ -97,8 +97,7 @@ class RefundServiceTest extends TestCase
             ['reason' => 'Customer changed mind']
         );
 
-        self::assertIsArray($result);
-        self::assertTrue($result['success']);
+        self::assertSame('refund_2', $result);
         // Records the *partial* amount (500), not the transaction total.
         self::assertSame([
             'vendor_charge_id' => 'refund_2',
@@ -134,8 +133,7 @@ class RefundServiceTest extends TestCase
 
         // The `description` key is dropped from the items payload (asserted by
         // the exact-match `->with()` on createForOrderId above).
-        self::assertIsArray($result);
-        self::assertTrue($result['success']);
+        self::assertSame('refund_3', $result);
     }
 
     public function test_single_line_partial_falls_back_to_transaction_currency(): void
@@ -157,8 +155,7 @@ class RefundServiceTest extends TestCase
         $service = $this->serviceWith($orders, $refunds);
         $result  = $service->refund($this->transaction('order_abc', 2300, 'USD'), 500);
 
-        self::assertIsArray($result);
-        self::assertTrue($result['success']);
+        self::assertSame('refund_4', $result);
     }
 
     public function test_multi_line_partial_refund_returns_error_without_api_call(): void
