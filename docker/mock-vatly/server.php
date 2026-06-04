@@ -11,14 +11,16 @@
  *   GET  /v1/checkouts/{id}                  → fetch checkout
  *   GET  /v1/subscriptions/{id}              → fetch subscription
  *   DELETE /v1/subscriptions/{id}            → cancel subscription
- *   GET  /v1/orders/{id}                     → fetch order
+ *   GET  /v1/orders/{id}                     → fetch order (with lines[]; ?lines=N)
  *   POST /v1/orders/{orderId}/refunds/full   → full refund
+ *   POST /v1/orders/{orderId}/refunds        → item-level (partial) refund
  *
  *   POST /__webhook/{event}                  → dev helper: signs & POSTs a webhook
  *   GET  /__hosted/{checkout_id}             → browser hosted-checkout simulator
  *
- * State lives in /tmp/mock-vatly-state.json. Safe to nuke; the next call
- * recreates anything it needs.
+ * State lives in /tmp/mock-vatly-state.json (override with the
+ * MOCK_VATLY_STATE_FILE env var). Safe to nuke; the next call recreates
+ * anything it needs.
  */
 
 declare(strict_types=1);
@@ -26,9 +28,19 @@ declare(strict_types=1);
 final class MockVatly
 {
 
-    private const STATE_FILE     = '/tmp/mock-vatly-state.json';
-    private const WEBHOOK_SECRET = 'mock-secret-for-dev-only-do-not-use-in-prod';
-    private const HOSTED_BASE    = 'http://localhost:8081/__hosted';
+    private const STATE_FILE_DEFAULT = '/tmp/mock-vatly-state.json';
+    private const WEBHOOK_SECRET     = 'mock-secret-for-dev-only-do-not-use-in-prod';
+    private const HOSTED_BASE        = 'http://localhost:8081/__hosted';
+
+    /**
+     * Where state is persisted. Overridable via `MOCK_VATLY_STATE_FILE` so
+     * tests (which run their own `php -S` instance) can point at an isolated,
+     * inspectable file instead of the shared `/tmp` default.
+     */
+    private function stateFile(): string
+    {
+        return getenv('MOCK_VATLY_STATE_FILE') ?: self::STATE_FILE_DEFAULT;
+    }
 
     public function handle(string $method, string $path): void
     {
@@ -89,8 +101,20 @@ final class MockVatly
         // SDK call: `createFullRefundForOrderId($orderId, ...)` → sets
         // parentId=$orderId, resourcePath="orders_refunds/full" → BaseEndpoint
         // splits on the first underscore: `orders/{orderId}/refunds/full`.
+        //
+        // NB: register the more specific `/refunds/full` route BEFORE the
+        // generic `/refunds` route below, or `/full` would match the generic
+        // item-level handler instead.
         if ($method === 'POST' && preg_match('#^/v1/orders/([^/]+)/refunds/full$#', $path, $m)) {
             return $this->full_refund($m[1]);
+        }
+
+        // SDK call: `createForOrderId($orderId, ['items' => [...]])` → sets
+        // parentId=$orderId, resourcePath="orders_refunds" → BaseEndpoint
+        // splits: `orders/{orderId}/refunds`. This is the item-level (partial)
+        // refund endpoint.
+        if ($method === 'POST' && preg_match('#^/v1/orders/([^/]+)/refunds$#', $path, $m)) {
+            return $this->partial_refund($m[1]);
         }
 
         // Dev helper for forging webhook deliveries.
@@ -224,27 +248,107 @@ final class MockVatly
         return $sub;
     }
 
+    /**
+     * Fetch an order.
+     *
+     * Stored orders (created via the hosted-checkout flow) are returned as-is.
+     * For ad-hoc ids that were never stored, we synthesize a realistic paid
+     * order so the refund flows can be exercised in isolation.
+     *
+     * The synthesized order carries a `lines[]` array shaped exactly like the
+     * real Vatly `OrderLine` resource — item-level refunds (`POST
+     * /orders/{id}/refunds`) refund against these lines, so the partial-refund
+     * path needs them. By default it's a single-line order (the unambiguous
+     * partial-refund happy path). Pass `?lines=2` to get a two-line order for
+     * exercising the multi-line branch.
+     */
     /** @return array<string, mixed> */
     private function get_order(string $id): array
     {
-        return $this->load('orders', $id) ?? [
-            'resource'      => 'order',
-            'id'            => $id,
-            'status'        => 'paid',
-            'invoiceNumber' => 'INV-' . substr($id, 0, 6),
-            'paymentMethod' => 'creditcard',
-            'customerId'    => 'customer_unknown',
-            'total'         => ['amount' => '23.00', 'currency' => 'EUR'],
-            'subtotal'      => ['amount' => '19.00', 'currency' => 'EUR'],
-            'taxSummary'    => [
-                'items' => [
-                    [
-                        'rate'   => ['name' => 'NL standard', 'percentage' => 21.0, 'taxablePercentage' => 100.0],
-                        'amount' => ['amount' => '4.00', 'currency' => 'EUR'],
-                    ],
-                ],
+        $stored = $this->load('orders', $id);
+        if ($stored) {
+            return $stored;
+        }
+
+        $lineCount = max(1, (int) ($_GET['lines'] ?? 1));
+
+        return $this->order_payload($id, 'customer_unknown', $lineCount);
+    }
+
+    /**
+     * Canonical paid-order payload, shaped to hydrate cleanly through
+     * api-php's `Order`/`OrderLine` resources (Money is `{value,currency}`,
+     * tax summary items are `{taxRate, amount}`).
+     *
+     * @param  array<string, mixed> $extra Extra top-level keys to merge in (e.g. metadata).
+     * @return array<string, mixed>
+     */
+    private function order_payload(string $id, string $customerId, int $lineCount = 1, array $extra = []): array
+    {
+        $base = [
+            'resource'           => 'order',
+            'id'                 => $id,
+            'status'             => 'paid',
+            'invoiceNumber'      => 'INV-' . substr($id, 0, 6),
+            'paymentMethod'      => 'creditcard',
+            'customerId'         => $customerId,
+            'total'              => ['value' => '23.00', 'currency' => 'EUR'],
+            'subtotal'           => ['value' => '19.00', 'currency' => 'EUR'],
+            'reversedSubtotal'   => ['value' => '0.00', 'currency' => 'EUR'],
+            'refundableSubtotal' => ['value' => '19.00', 'currency' => 'EUR'],
+            'taxSummary'         => $this->tax_summary(),
+            'lines'              => $this->order_lines($id, $lineCount),
+            'testmode'           => true,
+        ];
+
+        return array_merge($base, $extra);
+    }
+
+    /**
+     * Build a realistic `lines[]` array matching api-php's `OrderLine` shape.
+     *
+     * Line ids are deterministic (`order_item_{orderId}_{n}`) so a test can
+     * predict the `itemId` it expects in the partial-refund `items` payload.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function order_lines(string $orderId, int $count): array
+    {
+        $lines = [];
+
+        for ($n = 1; $n <= $count; $n++) {
+            $lines[] = [
+                'id'          => 'order_item_' . $orderId . '_' . $n,
+                'resource'    => 'orderline',
+                'description' => 'Mock product ' . $n,
+                'quantity'    => 1,
+                'productType' => 'subscription',
+                'productId'   => 'subscription_' . $orderId . '_' . $n,
+                'basePrice'   => ['value' => '19.00', 'currency' => 'EUR'],
+                'subtotal'    => ['value' => '19.00', 'currency' => 'EUR'],
+                'total'       => ['value' => '23.00', 'currency' => 'EUR'],
+                'taxes'       => $this->tax_summary(),
+            ];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Tax summary as the real API serializes it: a *bare JSON array* of
+     * `{taxRate, amount}` items (not wrapped in an `items` key). api-php
+     * decodes responses as objects and hydrates this list straight into a
+     * `TaxSummaryCollection`, so the wrapper shape would break hydration.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function tax_summary(): array
+    {
+        return [
+            [
+                'taxRate' => ['name' => 'NL standard', 'percentage' => 21.0, 'taxablePercentage' => 100.0],
+                'amount'  => ['value' => '4.00', 'currency' => 'EUR'],
             ],
-            'testmode'      => true,
         ];
     }
 
@@ -258,7 +362,7 @@ final class MockVatly
             'id'            => $refundId,
             'orderId'       => $orderId,
             'status'        => 'refunded',
-            'total'         => ['amount' => '23.00', 'currency' => 'EUR'],
+            'total'         => ['value' => '23.00', 'currency' => 'EUR'],
             'createdAt'     => date('c'),
             'testmode'      => true,
         ];
@@ -271,6 +375,55 @@ final class MockVatly
         // refund webhook reaction path.
         $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
         $this->emit_webhook($webhook_url, 'refund.completed', $refund, 'refund', $refundId);
+
+        return $refund;
+    }
+
+    /**
+     * Item-level (partial) refund: `POST /v1/orders/{id}/refunds`.
+     *
+     * Reads the `{items: [{itemId, amount: {value, currency}, description?}]}`
+     * body the SDK sends, echoes back a `refund` resource summing the item
+     * amounts, and stores it. The stored refund records the originating
+     * `items` payload under `requestItems` so a test can introspect exactly
+     * what the SDK posted (see the `GET /v1/orders/{id}/refunds` listing).
+     *
+     * @return array<string, mixed>
+     */
+    private function partial_refund(string $orderId): array
+    {
+        $body  = $this->json_body();
+        $items = is_array($body['items'] ?? null) ? $body['items'] : [];
+
+        $currency = 'EUR';
+        $total    = '0.00';
+        foreach ($items as $item) {
+            $amount = $item['amount'] ?? [];
+            if (isset($amount['currency'])) {
+                $currency = (string) $amount['currency'];
+            }
+            // bcadd keeps the decimal-string arithmetic exact.
+            $total = function_exists('bcadd')
+                ? bcadd($total, (string) ($amount['value'] ?? '0'), 2)
+                : number_format((float) $total + (float) ($amount['value'] ?? 0), 2, '.', '');
+        }
+
+        $refundId = 'refund_' . bin2hex(random_bytes(6));
+
+        $refund = [
+            'resource'     => 'refund',
+            'id'           => $refundId,
+            'orderId'      => $orderId,
+            'status'       => 'pending',
+            'total'        => ['value' => $total, 'currency' => $currency],
+            'createdAt'    => date('c'),
+            'testmode'     => true,
+            // Not part of the real Refund resource — a test seam so the
+            // integration suite can assert the SDK posted the right `items`.
+            'requestItems' => $items,
+        ];
+
+        $this->store('refunds', $refundId, $refund);
 
         return $refund;
     }
@@ -296,26 +449,12 @@ final class MockVatly
             $this->store('checkouts', $checkout_id, $checkout);
 
             // Store the order so subsequent /v1/orders/{id} requests work.
-            $this->store('orders', $checkout['orderId'], [
-                'resource'      => 'order',
-                'id'            => $checkout['orderId'],
-                'status'        => 'paid',
-                'invoiceNumber' => 'INV-' . substr($checkout['orderId'], 0, 6),
-                'paymentMethod' => 'creditcard',
-                'customerId'    => $checkout['customerId'],
-                'total'         => ['amount' => '23.00', 'currency' => 'EUR'],
-                'subtotal'      => ['amount' => '19.00', 'currency' => 'EUR'],
-                'metadata'      => $checkout['metadata'] ?? null,
-                'taxSummary'    => [
-                    'items' => [
-                        [
-                            'rate'   => ['name' => 'NL standard', 'percentage' => 21.0, 'taxablePercentage' => 100.0],
-                            'amount' => ['amount' => '4.00', 'currency' => 'EUR'],
-                        ],
-                    ],
-                ],
-                'testmode'      => true,
-            ]);
+            $this->store('orders', $checkout['orderId'], $this->order_payload(
+                $checkout['orderId'],
+                (string) $checkout['customerId'],
+                1,
+                ['metadata' => $checkout['metadata'] ?? null]
+            ));
 
             // Create a subscription so subsequent /v1/subscriptions/{id} works.
             $sub_id = 'subscription_' . bin2hex(random_bytes(6));
@@ -466,7 +605,7 @@ final class MockVatly
         $state[$bucket]      = $state[$bucket] ?? [];
         $state[$bucket][$id] = $value;
 
-        file_put_contents(self::STATE_FILE, json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+        file_put_contents($this->stateFile(), json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
     }
 
     /** @return array<string, mixed>|null */
@@ -480,11 +619,13 @@ final class MockVatly
     /** @return array<string, array<string, mixed>> */
     private function state(): array
     {
-        if (! file_exists(self::STATE_FILE)) {
+        $file = $this->stateFile();
+
+        if (! file_exists($file)) {
             return [];
         }
 
-        return json_decode((string) file_get_contents(self::STATE_FILE), true) ?: [];
+        return json_decode((string) file_get_contents($file), true) ?: [];
     }
 
     /** @return array<string, mixed> */
