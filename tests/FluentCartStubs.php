@@ -272,8 +272,21 @@ namespace FluentCart\App\Services\Payments {
 
     class Refund
     {
+        /**
+         * phpunit-only test seam: the args of the most recent
+         * createOrRecordRefund() call, so feature tests can assert the recorded
+         * refund payload (status/total/…) without a real database. PHPStan
+         * never inspects this; it only sees the no-op below.
+         *
+         * @var array{0: array<string, mixed>, 1: OrderTransaction}|null
+         */
+        public static ?array $lastRecorded = null;
+
         /** @param array<string, mixed> $args */
-        public static function createOrRecordRefund(array $args, OrderTransaction $parent): void {}
+        public static function createOrRecordRefund(array $args, OrderTransaction $parent): void
+        {
+            self::$lastRecorded = [$args, $parent];
+        }
     }
 }
 

@@ -59,6 +59,28 @@ For Vatly-paid orders the plugin also (issue #6):
 > confirmation are flagged inline with `// TODO: verify hook name on a live
 > FluentCart install`. See the PR for the full list.
 
+## Refunds
+
+Refunds issued from the FluentCart admin route through Vatly so the credit note
+(and its VAT) is computed and issued by the Merchant of Record. The resulting
+Vatly refund is recorded back onto the FluentCart transaction via
+`Refund::createOrRecordRefund`, and shows up in the merchant's Vatly dashboard.
+
+- **Full refunds** are fully supported. They route to Vatly's
+  `POST /orders/{id}/refunds/full` endpoint and need no item breakdown.
+- **Partial refunds** are supported for **single-item orders**. The plugin reads
+  the Vatly order's single line and refunds the requested amount against it via
+  the item-level `POST /orders/{id}/refunds` endpoint.
+- **Partial refunds on multi-item orders** are not supported from FluentCart yet.
+  Distributing a flat amount across several lines would make implicit accounting
+  decisions, so the gateway returns a clear error directing you to either issue
+  a **full** refund here, or refund a **specific item** from the **Vatly
+  dashboard** (where you can pick the line and amount).
+
+Vatly's refund API is asynchronous: the local FluentCart refund is recorded with
+Vatly's initial status (usually `pending`) and moves to `refunded` once Vatly
+confirms the payout.
+
 ## Development
 
 ```bash
