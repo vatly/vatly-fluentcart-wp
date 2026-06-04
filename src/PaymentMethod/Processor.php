@@ -69,7 +69,7 @@ final class Processor
                     ->withRedirectUrlSuccess($successUrl)
                     ->withRedirectUrlCanceled($cancelUrl);
 
-                $this->applyTrial($builder, $paymentInstance->subscription);
+                $builder = $this->applyTrial($builder, $paymentInstance->subscription);
 
                 $checkout = $builder->create(['metadata' => $metadata]);
             } else {
@@ -189,14 +189,20 @@ final class Processor
      * day-count because it maps 1:1 onto Vatly's whole-day `trialDays` input; we
      * only fall back to the end-date when the day-count is absent. When neither
      * indicates a trial, nothing is set and the plan-level default (if any) applies.
+     *
+     * Returns the builder with any FluentCart trial applied (no-op when the
+     * subscription has no trial).
+     *
+     * @param SubscriptionBuilder $builder      The subscription builder to apply the trial to.
+     * @param object              $subscription FluentCart subscription row.
+     *
+     * @return SubscriptionBuilder The same builder, with any trial applied.
      */
-    private function applyTrial(SubscriptionBuilder $builder, object $subscription): void
+    private function applyTrial(SubscriptionBuilder $builder, object $subscription): SubscriptionBuilder
     {
         $trialDays = isset($subscription->trial_days) ? (int) $subscription->trial_days : 0;
         if ($trialDays > 0) {
-            $builder->withTrialDays($trialDays);
-
-            return;
+            return $builder->withTrialDays($trialDays);
         }
 
         $trialEndsAt = $subscription->trial_ends_at ?? null;
@@ -206,15 +212,17 @@ final class Processor
                     ? $trialEndsAt
                     : new DateTimeImmutable((string) $trialEndsAt);
             } catch (Throwable $e) {
-                return;
+                return $builder;
             }
 
             // Only honor a trial end that is still in the future; a past date
             // means the trial has already elapsed (bill immediately).
             if ($endsAt->getTimestamp() > time()) {
-                $builder->withTrialEndsAt($endsAt);
+                return $builder->withTrialEndsAt($endsAt);
             }
         }
+
+        return $builder;
     }
 
     private function returnUrl(object $order, object $transaction, string $outcome): string
