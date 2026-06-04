@@ -36,28 +36,26 @@ Optional attribute: `[vatly_invoice_link order_id="123"]`.
 - the **receipt email body** — via the Gutenberg block editor;
 - any FluentCart-rendered template surface that accepts shortcodes.
 
-### What FluentCart-side invoicing is suppressed
+### What FluentCart-side invoicing the guard does (issue #6)
 
-For Vatly-paid orders the plugin also (issue #6):
+The MoR guard (`src/Support/MoRInvoiceGuard.php`) is wired **only against hooks
+verified to exist in FluentCart free v1.3.28**. Every callback is a strict no-op
+for non-Vatly orders (`payment_method !== 'vatly'`).
 
-- suppresses FluentCart's **own PDF invoice attachment** on the receipt email;
-- suppresses / redirects FluentCart's **own "Download invoice" link** to Vatly's
-  invoice instead;
-- **routes billing-detail edits to Vatly** — local edits never reach Vatly's
-  already-issued invoice and would create accounting drift, so they're hard
-  blocked with a pointer to the Vatly customer portal
-  (`SubscriptionService::updateBillingUrl()` for subscriptions);
-- suppresses FluentCart's **own refund PDF** and surfaces Vatly's stamped
-  credit-note URL instead.
+| Intent | Verified hook (FC free v1.3.28) | Status |
+| --- | --- | --- |
+| Surface the Vatly invoice link in the **customer receipt** | `fluent_cart/receipt/thank_you/after_order_items` (action; receiver gets the renderer config array with the `order`) | **Working on free.** Auto-renders the Vatly invoice button (reusing the shortcode renderer) beneath the order items for Vatly orders. |
+| Suppress FluentCart's **own PDF invoice/receipt** | `fluent_cart/pdf/generate_receipt` (short-circuit filter; one filter covers both the email PDF attachment and the dashboard download) | **Wired, Pro-only effect.** That filter is *only* invoked when FluentCart **Pro + FluentPDF** is active (`App::isProActive() && defined('FLUENT_PDF')`). On free there is no PDF, so nothing to suppress; on Pro the guard returns `null` (no PDF) for Vatly orders. **Verify on a Pro install.** |
+| **Refunds** — credit note | `fluent_cart/order_refunded` (+ `order_fully_refunded` / `order_partially_refunded`), actions carrying a `$data` array | **Observation point only.** Free core exposes **no** refund-PDF / refund-invoice-URL filter to redirect, so there is nothing to suppress; Vatly's credit note is surfaced via the Vatly customer portal, not by intercepting a FluentCart PDF. |
+| **Billing-detail edits** | _none_ | **No free hook.** Free core fires no action/filter when an order's or customer's billing/address is edited (`CustomerAddressResource::update` / admin `CustomerController::updateAddress` have no hooks). Gating would need a **FluentCart Pro / admin** hook confirmed on a Pro install. Until then, point staff to the Vatly customer portal (`SubscriptionService::updateBillingUrl()` for subscriptions) manually — local edits never reach Vatly's already-issued invoice. |
 
-> **Heads-up for maintainers:** FluentCart does not publicly document the exact
-> hook names for several of these suppression surfaces. The guard
-> (`src/Support/MoRInvoiceGuard.php`) is implemented against the most-likely
-> documented hook names, and **every callback is a strict no-op for non-Vatly
-> orders** — so a wrong hook name simply means that callback never fires; it can
-> never affect non-Vatly orders or other plugins. Hooks needing live
-> confirmation are flagged inline with `// TODO: verify hook name on a live
-> FluentCart install`. See the PR for the full list.
+> **Removed:** the earlier revision wired eight invented hook names
+> (`fluent_cart/email/should_attach_invoice`, `fluent_cart/email/attachments`,
+> `fluent_cart/order/invoice_download_url`, `fluent_cart/order/can_download_invoice`,
+> `fluent_cart/order/can_edit_billing`, `fluent_cart/order/before_update_billing`,
+> `fluent_cart/email/should_attach_refund_invoice`,
+> `fluent_cart/refund/invoice_download_url`). **None exist in FluentCart core** —
+> they were dead `add_filter()` calls that could never fire and have been deleted.
 
 ## Refunds
 
