@@ -28,11 +28,10 @@ When you sell through Vatly, **Vatly is the Merchant of Record**: it charges the
 
 ### From a release zip (recommended for production)
 
-1. Build the distributable zip — it bundles a conflict-safe, namespace-scoped copy of the dependencies:
-   ```bash
-   bin/build-release.sh        # → build/vatly-for-fluentcart.zip
-   ```
-2. In WordPress, go to **Plugins → Add New → Upload Plugin**, choose `vatly-for-fluentcart.zip`, and **Activate**.
+1. Download the latest `vatly-for-fluentcart-<version>.zip` from the [Releases page](https://github.com/sandervanhooft/vatly-fluentcart-wp/releases). Each release is built by CI and bundles a conflict-safe, namespace-scoped copy of the dependencies.
+2. In WordPress, go to **Plugins → Add New → Upload Plugin**, choose the zip, and **Activate**.
+
+> Prefer to build it yourself? `bin/build-release.sh` produces `build/vatly-for-fluentcart.zip` locally (requires PHP, Composer, curl, and zip).
 
 ### With Composer (for development)
 
