@@ -162,8 +162,8 @@ final class Processor
             }
 
             $items[] = [
-                'productId' => (string) $productId,
-                'quantity'  => (int) $line->quantity,
+                'id'       => (string) $productId,
+                'quantity' => (int) $line->quantity,
             ];
         }
 
