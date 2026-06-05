@@ -1,112 +1,105 @@
 ![Vatly for FluentCart](art/banner.png)
 
-# vatly-fluentcart-wp
+# Vatly for FluentCart
 
-Vatly Merchant-of-Record payment gateway for [FluentCart](https://fluentcart.com).
-Accept payments through Vatly — a European Merchant of Record handling VAT,
-invoicing and compliance — from inside FluentCart.
+Accept payments through **Vatly** — a European Merchant of Record that handles VAT, invoicing, and compliance — directly inside [FluentCart](https://fluentcart.com).
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777bb4.svg)
+![WordPress 6.2+](https://img.shields.io/badge/WordPress-6.2%2B-21759b.svg)
+
+When you sell through Vatly, **Vatly is the Merchant of Record**: it charges the correct VAT/sales tax for each country, issues the legally valid invoice, and carries the compliance burden. This plugin registers Vatly as a FluentCart payment gateway and keeps the two in sync — surfacing Vatly's official invoices in FluentCart, routing refunds back through Vatly, and supporting both one-off and subscription products.
+
+## Features
+
+- **Merchant-of-Record checkout** for one-off products and subscriptions, including free trials carried over from FluentCart.
+- **Official Vatly invoices** shown on the FluentCart receipt and available as shortcodes — while FluentCart's own competing receipt/invoice is automatically suppressed for Vatly orders, so customers never receive two invoices for one purchase.
+- **Refunds routed through Vatly**, so the credit note and its VAT are issued by the Merchant of Record and recorded back onto the FluentCart order.
+- **Per-record test/live mode**, frozen at checkout, so refunds and other follow-up calls always use the API key that matches the original order.
+
+## Requirements
+
+- WordPress 6.2 or newer
+- PHP 8.1 or newer
+- [FluentCart](https://fluentcart.com) installed and active
+- A [Vatly](https://vatly.com) account with API credentials
+
+## Installation
+
+### From a release zip (recommended for production)
+
+1. Download the latest `vatly-for-fluentcart-<version>.zip` from the [Releases page](https://github.com/sandervanhooft/vatly-fluentcart-wp/releases). Each release is built by CI and bundles a conflict-safe, namespace-scoped copy of the dependencies.
+2. In WordPress, go to **Plugins → Add New → Upload Plugin**, choose the zip, and **Activate**.
+
+> Prefer to build it yourself? `bin/build-release.sh` produces `build/vatly-for-fluentcart.zip` locally (requires PHP, Composer, curl, and zip).
+
+### With Composer (for development)
+
+```bash
+git clone https://github.com/sandervanhooft/vatly-fluentcart-wp.git
+cd vatly-fluentcart-wp
+composer install
+```
+
+Place (or symlink) the directory in `wp-content/plugins/` and activate it from the Plugins screen.
+
+## Setup
+
+1. **Add your API credentials.** Go to **FluentCart → Settings → Payment Methods → Vatly**, choose **Test** or **Live** mode, and paste the matching **API key** and **Webhook secret** from your Vatly dashboard.
+
+2. **Register the webhook in Vatly.** In the Vatly dashboard, add a webhook endpoint pointing at:
+   ```
+   https://your-site.com/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook
+   ```
+   Use the same webhook secret you entered above. Vatly's `order.paid` webhook is what stamps the official invoice onto each order.
+
+3. **Map your products to Vatly.** Edit a FluentCart product and fill in the **Vatly mapping** box with the IDs from your Vatly dashboard:
+   - **Vatly product ID** — the `one_off_product_…` id, for one-time products.
+   - **Vatly plan ID** — the `subscription_plan_…` id, for subscription products.
+
+   Set the id that matches how the product is sold. A checkout fails with a clear error if the product it's selling has no matching Vatly id.
 
 ## Merchant-of-Record invoicing
 
-Vatly is the **Merchant of Record**: the legally valid VAT invoice (and, for
-refunds, the credit note) is the one **Vatly** issues — not FluentCart's draft
-receipt. To avoid two competing invoices for the same purchase, this plugin
-surfaces Vatly's invoice and suppresses FluentCart's own invoicing for any order
-paid via the Vatly gateway (`payment_method === 'vatly'`).
+Vatly issues the legally valid VAT invoice (and, for refunds, the credit note) — not FluentCart's draft receipt. To avoid two competing invoices for the same purchase, the plugin surfaces Vatly's invoice and suppresses FluentCart's own invoicing for any order paid via the Vatly gateway.
 
-When a Vatly `order.paid` webhook lands, the plugin stamps Vatly's invoice URL
-onto the FluentCart order as `_vatly_invoice_url` meta (and the credit-note URL
-onto refunds). The pieces below render and protect that.
+When a Vatly `order.paid` webhook arrives, the plugin stamps the Vatly invoice URL onto the FluentCart order (and the credit-note URL onto refunds). You can surface that invoice anywhere FluentCart accepts shortcodes:
 
-### Invoice-link shortcodes
-
-Two shortcodes render the stamped Vatly invoice URL. Both resolve the order from
-an explicit `order_id` attribute, falling back to FluentCart's current-order
-context, and render **nothing** when there's no Vatly invoice on the order (so
-they're safe to leave in a template shared with non-Vatly orders):
-
-| Shortcode | Renders |
+| Shortcode | Output |
 | --- | --- |
-| `[vatly_invoice_link]` | A plain link — "Download official Vatly invoice". |
-| `[vatly_invoice_button]` | The same URL styled as a button. |
+| `[vatly_invoice_link]` | A plain "Download official Vatly invoice" link. |
+| `[vatly_invoice_button]` | The same link, styled as a button. |
 
-Optional attribute: `[vatly_invoice_link order_id="123"]`.
+Both accept an optional `order_id` (e.g. `[vatly_invoice_link order_id="123"]`); otherwise they use FluentCart's current-order context. They render nothing when an order has no Vatly invoice, so they're safe to leave in templates shared with non-Vatly orders. Good places for them are the **PDF invoice template** (via FluentCart's "Add ShortCodes" dropdown) and the **receipt email body** (via the block editor). The Vatly invoice button is also rendered automatically on the FluentCart receipt page.
 
-**Where to drop them** (FluentCart's blessed shortcode surfaces):
-
-- the **PDF invoice template** — via FluentCart's "Add ShortCodes" dropdown;
-- the **receipt email body** — via the Gutenberg block editor;
-- any FluentCart-rendered template surface that accepts shortcodes.
-
-### What FluentCart-side invoicing the guard does (issue #6)
-
-The MoR guard (`src/Support/MoRInvoiceGuard.php`) is wired **only against hooks
-verified to exist in FluentCart free v1.3.28**. Every callback is a strict no-op
-for non-Vatly orders (`payment_method !== 'vatly'`).
-
-Every hook is grep-confirmed to exist **and fire** in FluentCart free 1.3.28;
-each wired hook carries a `// verified: …` file:line comment in the source.
-
-| Intent | Verified hook (FC free v1.3.28) | Status |
-| --- | --- | --- |
-| Suppress FluentCart's **competing customer receipt/invoice email** (and its PDF attachment) | `fluent_cart/should_send_email_notification` (filter — `EmailNotificationMailer::mailEmailsOfEvent`, `app/Services/Email/EmailNotificationMailer.php:165`) | **Working on free + Pro.** Returns `false` for the `order_paid_customer` notification (event `order_paid`, subject "Purchase Receipt #{{order.invoice_no}}") on Vatly orders — the only customer mail that doubles as FluentCart's invoice and the only one that can attach FluentCart's PDF receipt. No email ⇒ no competing invoice and no attached PDF (covers Pro too). All other notifications — refunds, shipping, subscription, and every admin copy — pass through untouched. |
-| Surface the Vatly invoice link in the **customer receipt page** | `fluent_cart/receipt/thank_you/after_order_items` (action — `ThankYouRender`, `app/Services/Renderer/Receipt/ThankYouRender.php:162`; receiver gets the renderer config array with the `order`) | **Working on free.** Auto-renders the Vatly invoice button (reusing the shortcode renderer) beneath the order items for Vatly orders. |
-
-> **Removed (dead on free, deleted):**
-> - `fluent_cart/pdf/generate_receipt` — only ever invoked under FluentCart **Pro + FluentPDF** (`OrderService::canGenerateReceiptPdf()` + `defined('FLUENT_PDF')`), so the filter never fires on free. Superseded by suppressing the receipt **email**, which also drops its PDF attachment on Pro.
-> - the `fluent_cart/order_refunded` "observation" handler — it was a pure no-op (no free refund-PDF / refund-URL surface to redirect), i.e. dead code.
-> - eight invented hook names from a still-earlier revision (`fluent_cart/email/should_attach_invoice`, `fluent_cart/email/attachments`, `fluent_cart/order/invoice_download_url`, `fluent_cart/order/can_download_invoice`, `fluent_cart/order/can_edit_billing`, `fluent_cart/order/before_update_billing`, `fluent_cart/email/should_attach_refund_invoice`, `fluent_cart/refund/invoice_download_url`) — **none exist in FluentCart core**.
-
-### Documented FluentCart limitation (architectural fact, not a TODO)
-
-FluentCart (free 1.3.28) exposes **no hook to block admin billing-detail edits**
-(an order's / customer's billing/address — `CustomerAddressResource::update` and
-the admin `CustomerController::updateAddress` fire no action or filter) and **no
-hook to redirect its refund PDF**. For Vatly (MoR) orders these FluentCart-side
-artifacts remain **FluentCart-local and non-authoritative** — Vatly's invoice and
-credit note are the legal record of account. There is nothing to gate, so the
-plugin wires no handler for them; for subscriptions, point staff to the Vatly
-customer portal (`SubscriptionService::updateBillingUrl()`) when billing details
-must change, since a FluentCart-local edit never reaches Vatly's already-issued
-invoice.
+> For the exact FluentCart hooks the invoicing guard relies on — and the FluentCart limitations it works around — see [docs/merchant-of-record.md](docs/merchant-of-record.md).
 
 ## Refunds
 
-Refunds issued from the FluentCart admin route through Vatly so the credit note
-(and its VAT) is computed and issued by the Merchant of Record. The resulting
-Vatly refund is recorded back onto the FluentCart transaction via
-`Refund::createOrRecordRefund`, and shows up in the merchant's Vatly dashboard.
+Refunds issued from the FluentCart admin are routed through Vatly, so the credit note and its VAT are computed and issued by the Merchant of Record, then recorded back onto the FluentCart transaction and shown in your Vatly dashboard.
 
-- **Full refunds** are fully supported. They route to Vatly's
-  `POST /orders/{id}/refunds/full` endpoint and need no item breakdown.
-- **Partial refunds** are supported for **single-item orders**. The plugin reads
-  the Vatly order's single line and refunds the requested amount against it via
-  the item-level `POST /orders/{id}/refunds` endpoint.
-- **Partial refunds on multi-item orders** are not supported from FluentCart yet.
-  Distributing a flat amount across several lines would make implicit accounting
-  decisions, so the gateway returns a clear error directing you to either issue
-  a **full** refund here, or refund a **specific item** from the **Vatly
-  dashboard** (where you can pick the line and amount).
+- **Full refunds** — fully supported.
+- **Partial refunds on single-item orders** — supported; the requested amount is refunded against the order's line.
+- **Partial refunds on multi-item orders** — not supported from FluentCart. Splitting a flat amount across lines would make implicit accounting decisions, so the gateway returns a clear error: issue a **full** refund here, or refund a **specific line** from the **Vatly dashboard**.
 
-Vatly's refund API is asynchronous: the local FluentCart refund is recorded with
-Vatly's initial status (usually `pending`) and moves to `refunded` once Vatly
-confirms the payout.
+Vatly's refund API is asynchronous — the FluentCart refund is recorded with Vatly's initial status (usually `pending`) and moves to `refunded` once Vatly confirms the payout.
 
-### Test vs live (per-record mode)
+### Test and live mode
 
-Each FluentCart transaction freezes its `payment_mode` (test/live) at checkout.
-Refunds — and any other operation on an *existing* record — select the Vatly
-API key by **that record's mode**, not the current gateway settings toggle. So
-flipping the gateway from test to live (or back) doesn't make an old test
-order's refund hit the live key. New checkouts still use the settings mode. The
-mode is surfaced per record via `isTestmode()` on the Vatly order / subscription
-/ refund wrappers.
+Each FluentCart transaction freezes its mode (test/live) at checkout. Refunds and any other operation on an existing record use the Vatly API key for **that record's** mode — not the current gateway toggle. So switching the gateway between test and live never makes an old test order's refund hit the live key; new checkouts use the current setting. The mode is exposed per record via `isTestmode()` on the Vatly order / subscription / refund wrappers.
 
 ## Development
 
 ```bash
 composer install
-composer test:unit   # PHPUnit unit suite
-composer analyse     # PHPStan (level 5)
-composer phpcs       # WordPress security/i18n coding standards
+composer test:unit          # PHPUnit unit suite
+composer test:integration   # integration suite (see docker/ for a WP + FluentCart env)
+composer analyse            # PHPStan (level 5)
+composer phpcs              # WordPress coding standards (security + i18n)
 ```
+
+A Docker-based WordPress + FluentCart environment for manual and integration testing lives in [docker/](docker/).
+
+## License
+
+MIT © [Vatly](https://vatly.com)

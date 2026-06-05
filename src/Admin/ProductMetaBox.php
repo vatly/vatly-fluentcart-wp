@@ -49,7 +49,7 @@ final class ProductMetaBox
             <label for="vatly_product_id"><strong><?php esc_html_e('Vatly product ID', 'vatly-for-fluentcart'); ?></strong></label>
             <input type="text" id="vatly_product_id" name="vatly_product_id"
                    value="<?php echo esc_attr((string) $productId); ?>"
-                   placeholder="product_..."
+                   placeholder="one_off_product_..."
                    class="widefat" />
             <span class="description"><?php esc_html_e('Used for one-time payments.', 'vatly-for-fluentcart'); ?></span>
         </p>
@@ -57,7 +57,7 @@ final class ProductMetaBox
             <label for="vatly_plan_id"><strong><?php esc_html_e('Vatly plan ID', 'vatly-for-fluentcart'); ?></strong></label>
             <input type="text" id="vatly_plan_id" name="vatly_plan_id"
                    value="<?php echo esc_attr((string) $planId); ?>"
-                   placeholder="plan_..."
+                   placeholder="subscription_plan_..."
                    class="widefat" />
             <span class="description"><?php esc_html_e('Used for recurring subscriptions.', 'vatly-for-fluentcart'); ?></span>
         </p>
