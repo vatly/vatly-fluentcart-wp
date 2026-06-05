@@ -1,3 +1,5 @@
+![Vatly for FluentCart](art/banner.png)
+
 # vatly-fluentcart-wp
 
 Vatly Merchant-of-Record payment gateway for [FluentCart](https://fluentcart.com).
