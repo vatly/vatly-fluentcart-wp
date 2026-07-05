@@ -71,7 +71,7 @@ jobs:
           test -f "${SCOPED}/vendor/autoload.php"
           test -f "${SCOPED}/vendor/composer/autoload_classmap.php"
 
-          grep -c "Vatly\\\\FluentCart\\\\Vendor" "${SCOPED}/vendor/composer/autoload_classmap.php" \
+          grep -c "Vatly\\\\\\\\FluentCart\\\\\\\\Vendor" "${SCOPED}/vendor/composer/autoload_classmap.php" \
             | awk '$1 < 100 { print "Classmap looks empty (got " $1 " entries, expected >= 100)"; exit 1 }'
 
           # Composer's own runtime helpers MUST be reachable by their bare
