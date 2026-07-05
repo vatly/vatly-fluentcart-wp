@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "3a19668238728a387a5093319d6a5549",
+    "content-hash": "02862ab76fd5dabb7a6faf765c19e02e",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -80,16 +80,16 @@
         },
         {
             "name": "vatly/vatly-api-php",
-            "version": "v0.1.0-alpha.21",
+            "version": "v0.1.0-alpha.24",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-api-php.git",
-                "reference": "31ba27532e7ca83bdba7c1edf7963f4cc098b46b"
+                "reference": "0ddfbff147c62f1c32afd679bd1662f47a59250a"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/31ba27532e7ca83bdba7c1edf7963f4cc098b46b",
-                "reference": "31ba27532e7ca83bdba7c1edf7963f4cc098b46b",
+                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/0ddfbff147c62f1c32afd679bd1662f47a59250a",
+                "reference": "0ddfbff147c62f1c32afd679bd1662f47a59250a",
                 "shasum": ""
             },
             "require": {
@@ -140,27 +140,27 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-api-php/issues",
-                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.21"
+                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.24"
             },
-            "time": "2026-06-04T21:47:07+00:00"
+            "time": "2026-07-05T17:47:54+00:00"
         },
         {
             "name": "vatly/vatly-fluent-php",
-            "version": "v0.8.0-alpha.21",
+            "version": "v0.8.0-alpha.23",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-fluent-php.git",
-                "reference": "08d43e1bc3154cb67a9cc2c9b8bd1d3ddb3ed54b"
+                "reference": "d660090375d13ee8c44834d8349e7a66b86febe1"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/08d43e1bc3154cb67a9cc2c9b8bd1d3ddb3ed54b",
-                "reference": "08d43e1bc3154cb67a9cc2c9b8bd1d3ddb3ed54b",
+                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/d660090375d13ee8c44834d8349e7a66b86febe1",
+                "reference": "d660090375d13ee8c44834d8349e7a66b86febe1",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.1",
-                "vatly/vatly-api-php": "^0.1.0-alpha.21"
+                "vatly/vatly-api-php": "^0.1.0-alpha.24"
             },
             "require-dev": {
                 "mockery/mockery": "^1.6",
@@ -192,9 +192,9 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-fluent-php/issues",
-                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.21"
+                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.23"
             },
-            "time": "2026-06-04T22:03:05+00:00"
+            "time": "2026-07-05T19:32:08+00:00"
         }
     ],
     "packages-dev": [
