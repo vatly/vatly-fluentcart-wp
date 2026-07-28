@@ -1,4 +1,4 @@
-# Merchant-of-Record invoicing — implementation notes
+# Merchant-of-Record invoicing: implementation notes
 
 How the plugin makes Vatly the single source of truth for invoices on FluentCart
 orders, and the FluentCart integration points it relies on. This is reference
@@ -12,7 +12,7 @@ its own receipt/invoice. Left alone, a customer paying via Vatly would receive
 **two competing invoices** for one purchase.
 
 The plugin therefore (a) surfaces Vatly's invoice and (b) suppresses
-FluentCart's own invoicing — but only for orders paid via the Vatly gateway
+FluentCart's own invoicing, but only for orders paid via the Vatly gateway
 (`payment_method === 'vatly'`). Every guard callback is a strict no-op for
 non-Vatly orders. The guard lives in `src/Support/MoRInvoiceGuard.php`.
 
@@ -24,8 +24,8 @@ source.
 
 | Intent | FluentCart hook | Notes |
 | --- | --- | --- |
-| Suppress FluentCart's competing customer receipt/invoice email (and its PDF attachment) | `fluent_cart/should_send_email_notification` (filter — `EmailNotificationMailer::mailEmailsOfEvent`) | Returns `false` for the `order_paid_customer` notification (event `order_paid`, subject "Purchase Receipt #{{order.invoice_no}}") on Vatly orders — the only customer mail that doubles as FluentCart's invoice and the only one that can attach FluentCart's PDF receipt. No email ⇒ no competing invoice and no attached PDF (covers Pro too). All other notifications — refunds, shipping, subscription, and every admin copy — pass through untouched. |
-| Surface the Vatly invoice link on the customer receipt page | `fluent_cart/receipt/thank_you/after_order_items` (action — `ThankYouRender`) | Auto-renders the Vatly invoice button (reusing the shortcode renderer) beneath the order items for Vatly orders. |
+| Suppress FluentCart's competing customer receipt/invoice email (and its PDF attachment) | `fluent_cart/should_send_email_notification` (filter, `EmailNotificationMailer::mailEmailsOfEvent`) | Returns `false` for the `order_paid_customer` notification (event `order_paid`, subject "Purchase Receipt #{{order.invoice_no}}") on Vatly orders: the only customer mail that doubles as FluentCart's invoice and the only one that can attach FluentCart's PDF receipt. No email ⇒ no competing invoice and no attached PDF (covers Pro too). All other notifications (refunds, shipping, subscription, and every admin copy) pass through untouched. |
+| Surface the Vatly invoice link on the customer receipt page | `fluent_cart/receipt/thank_you/after_order_items` (action, `ThankYouRender`) | Auto-renders the Vatly invoice button (reusing the shortcode renderer) beneath the order items for Vatly orders. |
 
 ## Why some surfaces aren't hooked
 
@@ -34,9 +34,9 @@ source.
   `defined('FLUENT_PDF')`), so it never runs on free. Suppressing the receipt
   *email* already drops its PDF attachment on Pro, so no separate handler is
   needed.
-- **Refund PDF / refund URL** — FluentCart free exposes no hook to redirect a
+- **Refund PDF / refund URL**: FluentCart free exposes no hook to redirect a
   refund PDF, and there is no free refund-PDF surface to gate.
-- **Admin billing-detail edits** — FluentCart free fires no action or filter
+- **Admin billing-detail edits**: FluentCart free fires no action or filter
   around `CustomerAddressResource::update` or the admin
   `CustomerController::updateAddress`, so an admin edit of an order's/customer's
   billing address cannot be blocked or mirrored.
@@ -44,7 +44,7 @@ source.
 These FluentCart-side artifacts remain FluentCart-local and **non-authoritative**;
 Vatly's invoice and credit note are the legal record of account. For
 subscriptions, point staff to the Vatly customer portal
-(`SubscriptionService::updateBillingUrl()`) when billing details must change — a
+(`SubscriptionService::updateBillingUrl()`) when billing details must change; a
 FluentCart-local edit never reaches Vatly's already-issued invoice.
 
 > Earlier revisions referenced several FluentCart hook names that don't exist in
