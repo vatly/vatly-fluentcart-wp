@@ -1,13 +1,13 @@
 # Local Docker dev environment
 
 Self-contained WordPress + FluentCart + Vatly gateway sandbox. Everything
-runs against a **mock Vatly server** — no real API key needed.
+runs against a **mock Vatly server**: no real API key needed.
 
 ## TL;DR
 
 ```bash
 # Plugin's composer deps run inside the WP container, but the wp-cli image
-# is alpine without composer, so install them on the host first — the
+# is alpine without composer, so install them on the host first; the
 # bind-mount makes the same vendor/ available inside the container.
 composer install
 
@@ -31,7 +31,7 @@ open http://localhost:8080/wp-admin
 | `wp-cli`      | (run-on-demand)              | WP-CLI shell + the setup script entrypoint               |
 
 The plugin source on your host is **bind-mounted** into the WordPress
-container — edits hot-reload, no rebuild needed.
+container; edits hot-reload, no rebuild needed.
 
 ## Running a checkout
 
@@ -78,7 +78,7 @@ curl -s -X POST http://localhost:8081/__webhook/refund.completed \
 ```
 
 The mock signs every delivery with the secret
-`mock-secret-for-dev-only-do-not-use-in-prod` — same secret `setup.sh` writes
+`mock-secret-for-dev-only-do-not-use-in-prod`, the same secret `setup.sh` writes
 to the gateway options.
 
 ## Common ops
@@ -108,7 +108,7 @@ docker compose run --rm wp-cli sh -c '
 ```
 
 The integration suite needs a separate test database and the WP test
-scaffold — easiest to run those on the host with `bin/install-wp-tests.sh`,
+scaffold; easiest to run those on the host with `bin/install-wp-tests.sh`,
 not from inside this dev environment.
 
 ## Notes
