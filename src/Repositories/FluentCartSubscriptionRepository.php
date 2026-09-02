@@ -37,6 +37,14 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
      */
     public static bool $suppressOutboundCancel = false;
 
+    /**
+     * Post-meta key on the FluentCart subscription row that records Vatly's
+     * reason for a cancellation (`merchant_request` / `customer_request` /
+     * `payment_failure`). Stored as meta rather than a native column to avoid
+     * racing FluentCart's own subscription schema.
+     */
+    public const CANCELLATION_REASON_META = '_vatly_cancellation_reason';
+
     public function __construct(private Plugin $plugin) {}
 
     public function findByVatlyId(string $vatlyId): ?SubscriptionInterface
@@ -114,6 +122,16 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
 
         if ($dirty !== []) {
             $this->saveSuppressingOutbound($row, $dirty);
+        }
+
+        // Persist Vatly's cancellation reason alongside the end date so the
+        // merchant can see *why* a subscription ended. Cancel webhooks —
+        // including the hard nonpayment cancellation
+        // (subscription.canceled_for_nonpayment → `payment_failure`, fired once
+        // payment recovery is exhausted) — all carry this; other update events
+        // leave it null and never touch the meta.
+        if ($data->cancellationReason !== null) {
+            $row->updateMeta(self::CANCELLATION_REASON_META, $data->cancellationReason);
         }
 
         return new FluentCartSubscription($row);

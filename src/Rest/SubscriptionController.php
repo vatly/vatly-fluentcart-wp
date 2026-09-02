@@ -15,10 +15,12 @@ use WP_REST_Server;
 /**
  * REST surface for subscription self-service operations.
  *
- * Exposes the Vatly-hosted billing-update URL so a customer portal page can
- * link to it without templating PHP. Operations that change billing state
- * (cancel) sit behind capability checks because we don't yet ship a
- * customer-facing portal — admins drive these from FluentCart's admin UI.
+ * Exposes the Vatly-hosted billing-update URL and a full customer-portal
+ * session link so a customer-facing page can hand the subscription's owner a
+ * self-service billing surface without templating PHP; both routes are gated
+ * by {@see self::permitForSubscriptionOwner}. Operations that change billing
+ * state (cancel) sit behind a stricter `manage_options` check — admins drive
+ * those from FluentCart's admin UI.
  */
 final class SubscriptionController
 {
@@ -41,6 +43,16 @@ final class SubscriptionController
                 'id'                  => ['required' => true, 'sanitize_callback' => 'absint'],
                 'redirectUrlSuccess'  => ['required' => false, 'sanitize_callback' => 'esc_url_raw'],
                 'redirectUrlCanceled' => ['required' => false, 'sanitize_callback' => 'esc_url_raw'],
+            ],
+        ]);
+
+        register_rest_route(self::NAMESPACE, '/subscriptions/(?P<id>\d+)/portal-url', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [$this, 'createPortalUrl'],
+            'permission_callback' => [$this, 'permitForSubscriptionOwner'],
+            'args'                => [
+                'id'        => ['required' => true, 'sanitize_callback' => 'absint'],
+                'returnUrl' => ['required' => false, 'sanitize_callback' => 'esc_url_raw'],
             ],
         ]);
 
@@ -72,6 +84,34 @@ final class SubscriptionController
         $url = (new SubscriptionService($this->plugin))->updateBillingUrl($subscription, $prefill);
         if ($url === null) {
             return new WP_Error('vatly_failed', __('Could not create billing update link.', 'vatly-for-fluentcart'), ['status' => 502]);
+        }
+
+        return new WP_REST_Response(['url' => $url], 201);
+    }
+
+    /**
+     * Mint a single-use link into Vatly's hosted customer portal so the
+     * subscription's owner can self-serve their billing (payment method,
+     * invoices, subscriptions) as Merchant of Record. Gated by
+     * {@see self::permitForSubscriptionOwner}, mirroring the billing-update-url
+     * route.
+     *
+     * @return WP_REST_Response|WP_Error
+     */
+    public function createPortalUrl(WP_REST_Request $request)
+    {
+        $subscription = $this->findSubscription((int) $request['id']);
+        if ($subscription === null) {
+            return new WP_Error('vatly_not_found', __('Subscription not found.', 'vatly-for-fluentcart'), ['status' => 404]);
+        }
+
+        $options = array_filter([
+            'returnUrl' => (string) ($request['returnUrl'] ?? ''),
+        ], fn ($v) => $v !== '');
+
+        $url = (new SubscriptionService($this->plugin))->customerPortalUrl($subscription, $options);
+        if ($url === null) {
+            return new WP_Error('vatly_failed', __('Could not create billing portal link.', 'vatly-for-fluentcart'), ['status' => 502]);
         }
 
         return new WP_REST_Response(['url' => $url], 201);

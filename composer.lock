@@ -4,20 +4,20 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "02862ab76fd5dabb7a6faf765c19e02e",
+    "content-hash": "b457549367c72f97e8589115e1d45fef",
     "packages": [
         {
             "name": "composer/ca-bundle",
-            "version": "1.5.12",
+            "version": "1.5.14",
             "source": {
                 "type": "git",
                 "url": "https://github.com/composer/ca-bundle.git",
-                "reference": "00a2f4201641d5c53f7fc0195e6c8d9fcc321a78"
+                "reference": "0c8abba0634f637bd78c4e451981da368d403463"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/composer/ca-bundle/zipball/00a2f4201641d5c53f7fc0195e6c8d9fcc321a78",
-                "reference": "00a2f4201641d5c53f7fc0195e6c8d9fcc321a78",
+                "url": "https://api.github.com/repos/composer/ca-bundle/zipball/0c8abba0634f637bd78c4e451981da368d403463",
+                "reference": "0c8abba0634f637bd78c4e451981da368d403463",
                 "shasum": ""
             },
             "require": {
@@ -64,7 +64,7 @@
             "support": {
                 "irc": "irc://irc.freenode.org/composer",
                 "issues": "https://github.com/composer/ca-bundle/issues",
-                "source": "https://github.com/composer/ca-bundle/tree/1.5.12"
+                "source": "https://github.com/composer/ca-bundle/tree/1.5.14"
             },
             "funding": [
                 {
@@ -76,20 +76,20 @@
                     "type": "github"
                 }
             ],
-            "time": "2026-05-19T11:26:22+00:00"
+            "time": "2026-08-21T14:57:29+00:00"
         },
         {
             "name": "vatly/vatly-api-php",
-            "version": "v0.1.0-alpha.24",
+            "version": "v0.1.0-alpha.28",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-api-php.git",
-                "reference": "0ddfbff147c62f1c32afd679bd1662f47a59250a"
+                "reference": "83b3c8e5a59d83da341f34f221e6a200568ed108"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/0ddfbff147c62f1c32afd679bd1662f47a59250a",
-                "reference": "0ddfbff147c62f1c32afd679bd1662f47a59250a",
+                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/83b3c8e5a59d83da341f34f221e6a200568ed108",
+                "reference": "83b3c8e5a59d83da341f34f221e6a200568ed108",
                 "shasum": ""
             },
             "require": {
@@ -140,27 +140,27 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-api-php/issues",
-                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.24"
+                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.28"
             },
-            "time": "2026-07-05T17:47:54+00:00"
+            "time": "2026-09-02T08:23:00+00:00"
         },
         {
             "name": "vatly/vatly-fluent-php",
-            "version": "v0.8.0-alpha.23",
+            "version": "v0.8.0-alpha.26",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-fluent-php.git",
-                "reference": "d660090375d13ee8c44834d8349e7a66b86febe1"
+                "reference": "5a838b72e400e138c9702aa3c09af0f1df74dc11"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/d660090375d13ee8c44834d8349e7a66b86febe1",
-                "reference": "d660090375d13ee8c44834d8349e7a66b86febe1",
+                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/5a838b72e400e138c9702aa3c09af0f1df74dc11",
+                "reference": "5a838b72e400e138c9702aa3c09af0f1df74dc11",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.1",
-                "vatly/vatly-api-php": "^0.1.0-alpha.24"
+                "vatly/vatly-api-php": "^0.1.0-alpha.28"
             },
             "require-dev": {
                 "mockery/mockery": "^1.6",
@@ -192,9 +192,9 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-fluent-php/issues",
-                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.23"
+                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.26"
             },
-            "time": "2026-07-05T19:32:08+00:00"
+            "time": "2026-09-02T08:26:36+00:00"
         }
     ],
     "packages-dev": [
@@ -2799,16 +2799,16 @@
         },
         {
             "name": "squizlabs/php_codesniffer",
-            "version": "3.13.5",
+            "version": "3.13.6",
             "source": {
                 "type": "git",
                 "url": "https://github.com/PHPCSStandards/PHP_CodeSniffer.git",
-                "reference": "0ca86845ce43291e8f5692c7356fccf3bcf02bf4"
+                "reference": "4c378e1a528ea066890fc2397cbdd2f94eb2fc91"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/PHPCSStandards/PHP_CodeSniffer/zipball/0ca86845ce43291e8f5692c7356fccf3bcf02bf4",
-                "reference": "0ca86845ce43291e8f5692c7356fccf3bcf02bf4",
+                "url": "https://api.github.com/repos/PHPCSStandards/PHP_CodeSniffer/zipball/4c378e1a528ea066890fc2397cbdd2f94eb2fc91",
+                "reference": "4c378e1a528ea066890fc2397cbdd2f94eb2fc91",
                 "shasum": ""
             },
             "require": {
@@ -2874,7 +2874,7 @@
                     "type": "thanks_dev"
                 }
             ],
-            "time": "2025-11-04T16:30:35+00:00"
+            "time": "2026-08-06T00:17:32+00:00"
         },
         {
             "name": "szepeviktor/phpstan-wordpress",

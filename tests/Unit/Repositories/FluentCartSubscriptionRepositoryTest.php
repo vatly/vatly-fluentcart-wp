@@ -82,6 +82,45 @@ class FluentCartSubscriptionRepositoryTest extends TestCase
         $this->assertHookExpectations();
     }
 
+    public function test_update_persists_cancellation_reason_meta_when_provided(): void
+    {
+        // A cancel webhook carries both the end date and the reason. The reason
+        // is stored as post meta (not a native column) so the merchant can see
+        // *why* the subscription ended.
+        $row = Mockery::mock(Subscription::class);
+        $row->shouldReceive('fill')->once()->andReturnSelf();
+        $row->shouldReceive('save')->once()->andReturn(true);
+        $row->shouldReceive('updateMeta')->once()->with(
+            FluentCartSubscriptionRepository::CANCELLATION_REASON_META,
+            'payment_failure',
+        );
+
+        (new FluentCartSubscriptionRepository($this->plugin()))->update(
+            new FluentCartSubscription($row),
+            new UpdateSubscriptionData(
+                endsAt: new DateTimeImmutable('2026-12-31 00:00:00'),
+                cancellationReason: 'payment_failure',
+            ),
+        );
+
+        $this->assertHookExpectations();
+    }
+
+    public function test_update_without_cancellation_reason_does_not_write_meta(): void
+    {
+        $row = Mockery::mock(Subscription::class);
+        $row->shouldReceive('fill')->once()->andReturnSelf();
+        $row->shouldReceive('save')->once()->andReturn(true);
+        $row->shouldNotReceive('updateMeta');
+
+        (new FluentCartSubscriptionRepository($this->plugin()))->update(
+            new FluentCartSubscription($row),
+            new UpdateSubscriptionData(endsAt: new DateTimeImmutable('2026-12-31 00:00:00')),
+        );
+
+        $this->assertHookExpectations();
+    }
+
     public function test_update_with_clearEndsAt_resumes_to_active(): void
     {
         // clearEndsAt is the resume path: blank both timestamps and flip to active.
