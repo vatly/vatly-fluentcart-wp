@@ -67,4 +67,30 @@ final class SubscriptionService
             return null;
         }
     }
+
+    /**
+     * A short-lived, single-use entry link into Vatly's hosted customer portal,
+     * where the customer can manage their own billing (payment method, invoices,
+     * subscriptions) as Merchant of Record. Resolved from the subscription's
+     * stored Vatly customer id.
+     *
+     * The link is credential-bearing and expires after ~15 minutes — return it
+     * straight to the customer's browser; never cache or log it.
+     *
+     * @param array<string, mixed> $options Optional body (`returnUrl`).
+     */
+    public function customerPortalUrl(Subscription $subscription, array $options = []): ?string
+    {
+        $vatlyCustomerId = (string) ($subscription->vendor_customer_id ?? '');
+        if ($vatlyCustomerId === '') {
+            return null;
+        }
+
+        try {
+            return $this->plugin->vatly()->customer($vatlyCustomerId)->portalSession($options)->url;
+        } catch (Throwable $e) {
+            error_log('[vatly-for-fluentcart] customer portal session failed: ' . $e->getMessage());
+            return null;
+        }
+    }
 }
