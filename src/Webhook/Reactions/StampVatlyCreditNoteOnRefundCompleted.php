@@ -25,8 +25,16 @@ use Vatly\FluentCart\Plugin;
  *     → GetRefund($refundId) → Refund.orderId  (the credit order)
  *       → GetOrder($creditOrderId) → OrderLinks.customerInvoice  (the credit note)
  *
- * Two API roundtrips per webhook delivery — acceptable since refunds are
- * infrequent compared to order.paid.
+ * Note on the first GetRefund: it is *recoverable* overhead, not inherent. The
+ * refund.completed webhook payload is fat and signed — byte-identical to
+ * `GET /v1/refunds/{id}` — and vatly-api-php's WebhookEventFactory already
+ * hydrates the full Refund resource (including `orderId`) from it with zero
+ * network round-trip. The typed {@see RefundCompleted} event then drops
+ * `orderId` on the way through, so we re-fetch the very data that was in hand a
+ * moment earlier. Exposing `orderId` on the event upstream would let this
+ * reaction skip straight to the single GetOrder. Tracked upstream in
+ * vatly-api-php; until then the GetRefund stays (refunds are infrequent, so the
+ * extra round-trip is acceptable).
  *
  * Runs as an `additionalWebhookReactions` entry so it fires alongside the
  * built-in {@see \Vatly\Fluent\Webhooks\Reactions\SyncRefundOnStatusChange}
