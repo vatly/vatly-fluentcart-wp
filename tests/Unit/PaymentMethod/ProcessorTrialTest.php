@@ -6,7 +6,7 @@ namespace Vatly\FluentCart\Tests\Unit\PaymentMethod;
 
 use Brain\Monkey\Functions;
 use FluentCart\App\Models\Subscription;
-use FluentCart\App\Modules\PaymentMethods\Core\PaymentInstance;
+use FluentCart\App\Services\Payments\PaymentInstance;
 use Mockery;
 use Vatly\Fluent\Builders\SubscriptionBuilder;
 use Vatly\Fluent\Testing\FakeCheckout;
@@ -133,7 +133,7 @@ class ProcessorTrialTest extends TestCase
         $order->customer = null;             // anonymous-checkout: skips customers()
         $order->email = 'buyer@example.test';
         $order->customer_name = 'Buyer';
-        $order->items = [(object) ['post_id' => 100, 'quantity' => 2]];
+        $order->order_items = [(object) ['post_id' => 100, 'quantity' => 2]];
 
         $instance = new PaymentInstance();
         $instance->order = $order;

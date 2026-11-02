@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Tests\Unit\Repositories;
 
-use FluentCart\App\Models\Refund;
+use FluentCart\App\Models\OrderTransaction;
 use Mockery;
 use Vatly\Fluent\Contracts\RefundInterface;
 use Vatly\Fluent\Data\StoreRefundData;
@@ -122,7 +122,7 @@ class FluentCartRefundRepositoryTest extends TestCase
 
     public function test_update_with_no_changes_does_not_touch_the_row(): void
     {
-        $row = Mockery::mock(Refund::class);
+        $row = Mockery::mock(OrderTransaction::class);
         $row->shouldNotReceive('fill');
         $row->shouldNotReceive('save');
 
@@ -137,9 +137,9 @@ class FluentCartRefundRepositoryTest extends TestCase
     /**
      * @param array<string, mixed> $expectFill
      */
-    private function makeRowMock(array $expectFill): Refund
+    private function makeRowMock(array $expectFill): OrderTransaction
     {
-        $row = Mockery::mock(Refund::class);
+        $row = Mockery::mock(OrderTransaction::class);
         $row->shouldReceive('fill')->once()->with($expectFill)->andReturnSelf();
         $row->shouldReceive('save')->once()->andReturn(true);
 

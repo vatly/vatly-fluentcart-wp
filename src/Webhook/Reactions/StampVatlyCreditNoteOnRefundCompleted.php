@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Webhook\Reactions;
 
-use FluentCart\App\Models\Refund;
+use FluentCart\App\Helpers\Status;
+use FluentCart\App\Models\OrderTransaction;
 use Throwable;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\RefundCompleted;
@@ -71,9 +72,10 @@ final class StampVatlyCreditNoteOnRefundCompleted implements WebhookReactionInte
 
         $creditNoteUrl = $creditOrder->links->customerInvoice->href ?? null;
 
-        $refundRow = Refund::query()
+        $refundRow = OrderTransaction::query()
             ->where('vendor_charge_id', $event->refundId)
             ->where('payment_method', 'vatly')
+            ->where('transaction_type', Status::TRANSACTION_TYPE_REFUND)
             ->first();
 
         if ($refundRow === null) {
@@ -83,9 +85,15 @@ final class StampVatlyCreditNoteOnRefundCompleted implements WebhookReactionInte
             return;
         }
 
+        // FluentCart 2.2.0's OrderTransaction has no updateMeta() helper (unlike
+        // Order/Subscription); it carries a JSON `meta` column instead, so we
+        // merge into that and save.
+        $meta = is_array($refundRow->meta) ? $refundRow->meta : [];
         if ($creditNoteUrl !== null) {
-            $refundRow->updateMeta('_vatly_credit_note_url', $creditNoteUrl);
+            $meta['_vatly_credit_note_url'] = $creditNoteUrl;
         }
-        $refundRow->updateMeta('_vatly_mor_disclosure', __('This refund was processed by Vatly as Merchant of Record. The legally valid credit note is provided by Vatly.', 'vatly-for-fluentcart'));
+        $meta['_vatly_mor_disclosure'] = __('This refund was processed by Vatly as Merchant of Record. The legally valid credit note is provided by Vatly.', 'vatly-for-fluentcart');
+        $refundRow->meta = $meta;
+        $refundRow->save();
     }
 }

@@ -103,6 +103,17 @@ namespace FluentCart\App {
 
 namespace FluentCart\App\Modules\PaymentMethods\Core {
 
+    /**
+     * Mirrors FluentCart 2.2.0's gateway contract closely enough to catch
+     * signature drift in this plugin's own gateway:
+     *
+     *  - `getOrderInfo(array $data)` is a real interface method; omitting it in
+     *    the SUT must fail to load (as it did when the plugin targeted an older
+     *    FluentCart that had no such method).
+     *  - `processRefund($transaction, $amount, $args)` is UNTYPED here, exactly
+     *    as FluentCart declares it, so re-adding parameter type hints in the SUT
+     *    override is an incompatible signature and fails at load.
+     */
     abstract class AbstractPaymentGateway
     {
         /** @var array<int, string> */
@@ -114,25 +125,49 @@ namespace FluentCart\App\Modules\PaymentMethods\Core {
         abstract public function meta(): array;
 
         abstract public function has(string $feature): bool;
-    }
 
-    abstract class AbstractPaymentSettings
-    {
-        public string $optionKey = '';
+        abstract public function getOrderInfo(array $data);
 
-        /** @return array<string, array<string, mixed>> */
-        abstract public function fields(): array;
+        public function processRefund($transaction, $amount, $args)
+        {
+            return new \WP_Error('not_implemented', 'Refunds not implemented.');
+        }
+
+        public function isEnabled(): bool
+        {
+            return false;
+        }
     }
 
     /**
-     * Surface inferred from the FluentCart dev-docs Paddle case study.
+     * FluentCart 2.2.0's settings base: a fct_meta-backed store whose subclasses
+     * implement the three accessors. (The real constructor loads from the Meta
+     * table; the stub ctor is a no-op so settings classes instantiate without a
+     * database.)
      */
-    final class PaymentInstance
+    abstract class BaseGatewaySettings
     {
-        public object $order;
-        public object $transaction;
-        public ?object $subscription = null;
+        // Untyped, exactly as FluentCart declares them, so a subclass may give
+        // $methodHandler its own (string) default without a variance error.
+        public $methodHandler;
+        public $settings;
+
+        public function __construct() {}
+
+        /** @return mixed */
+        abstract public function get($key = '');
+
+        /** @return mixed */
+        abstract public function getMode();
+
+        /** @return mixed */
+        abstract public function isActive();
     }
+
+    /**
+     * FluentCart 2.2.0 moved PaymentInstance to App\Services\Payments; see that
+     * namespace below. (Kept nothing here on purpose.)
+     */
 }
 
 namespace FluentCart\App\Models {
@@ -143,6 +178,8 @@ namespace FluentCart\App\Models {
     {
         public int $id;
         public ?string $payment_method = null;
+        /** @var array<int, object> FluentCart's line items relation (fct_order_items) */
+        public array $order_items = [];
         /** @var array<string, mixed> in-memory mirror of FluentCart's order meta — phpunit-only */
         public array $meta = [];
 
@@ -169,29 +206,11 @@ namespace FluentCart\App\Models {
         public ?string $payment_method = null;
         public ?string $payment_mode = null;
         public ?int $subscription_id = null;
-
-        /** @return Builder<self> */
-        public static function query(): Builder { return new Builder(); }
-
-        /** @param array<string, mixed> $attrs */
-        public function fill(array $attrs): self { return $this; }
-
-        public function save(): bool { return true; }
-
-        public function refresh(): self { return $this; }
-    }
-
-    class Refund
-    {
-        public int $id;
-        public ?string $vendor_charge_id = null;
-        public ?string $status = null;
-        public ?int $total = null;
-        public ?string $currency = null;
-        public ?string $payment_method = null;
-        public ?string $payment_mode = null;
-        public ?int $parent_transaction_id = null;
-        /** @var array<string, mixed> in-memory mirror of FluentCart's refund meta — phpunit-only */
+        // FluentCart 2.2.0 models a refund as an OrderTransaction row with
+        // transaction_type = 'refund' (linked to its parent via meta.parent_id),
+        // so the refund wrappers/repositories query this type.
+        public ?string $transaction_type = null;
+        /** @var array<string, mixed> in-memory mirror of the transaction's JSON meta column */
         public array $meta = [];
 
         /** @return Builder<self> */
@@ -202,9 +221,10 @@ namespace FluentCart\App\Models {
 
         public function save(): bool { return true; }
 
-        public function updateMeta(string $key, string $value): void { $this->meta[$key] = $value; }
+        public function refresh(): self { return $this; }
 
-        public function getMeta(string $key, mixed $default = null): mixed { return $this->meta[$key] ?? $default; }
+        /** @return object relation accessor used by the gateway's receipt-URL/order lookups */
+        public ?object $order = null;
     }
 
     class Subscription
@@ -216,7 +236,9 @@ namespace FluentCart\App\Models {
         public ?string $vendor_subscription_id = null;
         public ?string $vendor_customer_id = null;
         public ?string $vendor_plan_id = null;
-        public ?string $payment_method = null;
+        // FluentCart 2.2.0 stores the gateway on `current_payment_method`
+        // (there is no `payment_method` column on subscriptions).
+        public ?string $current_payment_method = null;
         public ?string $payment_mode = null;
         public ?string $status = null;
         public ?int $quantity = null;
@@ -265,10 +287,17 @@ namespace FluentCart\App\Services\Payments {
 
     use FluentCart\App\Models\OrderTransaction;
 
-    class Confirmations
+    /**
+     * FluentCart 2.2.0 moved PaymentInstance here from
+     * App\Modules\PaymentMethods\Core. It is the object handed to a gateway's
+     * makePaymentFromPaymentInstance().
+     */
+    final class PaymentInstance
     {
-        /** @param array<string, mixed> $details */
-        public function confirmPaymentSuccessByCharge(OrderTransaction $transaction, array $details): void {}
+        public object $order;
+        public object $transaction;
+        public ?object $subscription = null;
+        public ?string $paymentType = null;
     }
 
     class Refund
@@ -291,13 +320,52 @@ namespace FluentCart\App\Services\Payments {
     }
 }
 
-namespace FluentCart\App\Services\Subscription {
+namespace FluentCart\App\Helpers {
+
+    /** The subset of FluentCart 2.2.0's status enum the gateway relies on. */
+    class Status
+    {
+        public const TRANSACTION_SUCCEEDED   = 'succeeded';
+        public const TRANSACTION_PENDING     = 'pending';
+        public const TRANSACTION_REFUNDED    = 'refunded';
+        public const TRANSACTION_FAILED      = 'failed';
+        public const TRANSACTION_TYPE_CHARGE = 'charge';
+        public const TRANSACTION_TYPE_REFUND = 'refund';
+    }
+
+    /**
+     * FluentCart 2.2.0's canonical post-payment step: claims the order's
+     * pending -> paid transition after a charge transaction is marked
+     * succeeded. The gateway uses it in place of the (Stripe-specific)
+     * Confirmations service the plugin targeted on older FluentCart.
+     */
+    class StatusHelper
+    {
+        public function __construct(mixed $order = null) {}
+
+        public function syncOrderStatuses(mixed $latestTransaction = null): mixed { return null; }
+    }
+}
+
+namespace FluentCart\App\Modules\Subscriptions\Services {
 
     use FluentCart\App\Models\Subscription;
 
-    class SubscriptionRenewal
+    /**
+     * FluentCart 2.2.0 relocated renewal recording here (from
+     * App\Services\Subscription\SubscriptionRenewal) and reordered the args:
+     * the transaction-data array is first, the subscription second.
+     */
+    class SubscriptionService
     {
-        /** @param array<string, mixed> $args */
-        public static function recordRenewalPayment(Subscription $subscription, array $args): void {}
+        /**
+         * @param array<string, mixed> $transactionData
+         * @param array<string, mixed> $subscriptionUpdateArgs
+         * @return mixed
+         */
+        public static function recordRenewalPayment(array $transactionData, ?Subscription $subscriptionModel = null, array $subscriptionUpdateArgs = [])
+        {
+            return null;
+        }
     }
 }

@@ -63,7 +63,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $row = new Subscription();
         $row->id = 55;
         $row->status = 'active';
-        $row->payment_method = 'vatly';
+        $row->current_payment_method = 'vatly';
 
         // The checkout-stamped path looks the subscription up by id directly.
         Builder::$nextResults = [$row];
@@ -90,7 +90,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $row = new Subscription();
         $row->id = 77;
         $row->status = 'active';
-        $row->payment_method = 'vatly';
+        $row->current_payment_method = 'vatly';
 
         Builder::$nextResults = [$row];
 
@@ -114,7 +114,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $row = new Subscription();
         $row->id = 55;
         $row->status = 'past_due';
-        $row->payment_method = 'vatly';
+        $row->current_payment_method = 'vatly';
 
         Builder::$nextResults = [$row];
 

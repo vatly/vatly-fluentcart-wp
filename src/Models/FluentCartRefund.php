@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Models;
 
-use FluentCart\App\Models\Refund;
+use FluentCart\App\Models\OrderTransaction;
 use Vatly\Fluent\Contracts\RefundInterface;
 
 /**
- * {@see RefundInterface} adapter wrapping a FluentCart Refund row.
+ * {@see RefundInterface} adapter wrapping a FluentCart refund OrderTransaction.
+ *
+ * FluentCart 2.2.0 has no dedicated Refund model: a refund is an
+ * OrderTransaction row with `transaction_type = refund` linked to its parent
+ * charge through `meta['parent_id']`. We wrap that transaction here.
  *
  * Returned from {@see \Vatly\FluentCart\Repositories\FluentCartRefundRepository}
  * so fluent's built-in {@see \Vatly\Fluent\Webhooks\Reactions\SyncRefundOnStatusChange}
@@ -24,7 +28,7 @@ use Vatly\Fluent\Contracts\RefundInterface;
  */
 final class FluentCartRefund implements RefundInterface
 {
-    public function __construct(public readonly Refund $refund) {}
+    public function __construct(public readonly OrderTransaction $refund) {}
 
     public function getVatlyId(): string
     {

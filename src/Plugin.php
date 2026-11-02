@@ -161,7 +161,7 @@ final class Plugin
         }
 
         $subscription = $data['subscription'] ?? null;
-        if (! is_object($subscription) || ($subscription->payment_method ?? null) !== 'vatly') {
+        if (! is_object($subscription) || ($subscription->current_payment_method ?? null) !== 'vatly') {
             return;
         }
 

@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Repositories;
 
-use FluentCart\App\Models\Refund;
+use FluentCart\App\Helpers\Status;
+use FluentCart\App\Models\OrderTransaction;
 use Vatly\API\Types\RefundStatus as VatlyRefundStatus;
 use Vatly\Fluent\Contracts\RefundInterface;
 use Vatly\Fluent\Contracts\RefundRepositoryInterface;
@@ -32,9 +33,10 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
 {
     public function findByVatlyId(string $vatlyId): ?RefundInterface
     {
-        $refund = Refund::query()
+        $refund = OrderTransaction::query()
             ->where('vendor_charge_id', $vatlyId)
             ->where('payment_method', 'vatly')
+            ->where('transaction_type', Status::TRANSACTION_TYPE_REFUND)
             ->first();
 
         return $refund ? new FluentCartRefund($refund) : null;

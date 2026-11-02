@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\PaymentMethod;
 
 use DateTimeImmutable;
-use FluentCart\App\Modules\PaymentMethods\Core\PaymentInstance;
+use FluentCart\App\Services\Payments\PaymentInstance;
 use Throwable;
 use Vatly\Fluent\Builders\SubscriptionBuilder;
 use Vatly\Fluent\CustomerProfile;
@@ -65,7 +65,7 @@ final class Processor
                 $builder = $vatly
                     ->subscriptionBuilder($profile)
                     ->toPlan($this->resolveSubscriptionPlanId($order))
-                    ->withQuantity((int) ($order->items[0]->quantity ?? 1))
+                    ->withQuantity((int) ($order->order_items[0]->quantity ?? 1))
                     ->withRedirectUrlSuccess($successUrl)
                     ->withRedirectUrlCanceled($cancelUrl);
 
@@ -97,9 +97,9 @@ final class Processor
         // FluentCart's checkout JS performs the hosted-checkout redirect off the
         // `redirect_to` key when `status === 'success'`; `redirect_url` is NOT
         // read on this place-order response path.
-        // verified: FluentCart free 1.3.28 — the place-order response handler in
-        // assets/ reads `status`/`redirect_to` (mirrors the COD gateway return in
-        // app/Modules/PaymentMethods/Cod/Cod.php:61-65).
+        // verified: FluentCart free 2.2.0 — confirmed end-to-end: returning
+        // `status: success` + `redirect_to` performs the hosted-checkout
+        // redirect (mirrors the first-party redirect gateways' return shape).
         return [
             'status'      => 'success',
             'message'     => __('Redirecting to Vatly to complete your payment…', 'vatly-for-fluentcart'),
@@ -153,7 +153,7 @@ final class Processor
     {
         $items = [];
 
-        foreach ($order->items as $line) {
+        foreach ($order->order_items as $line) {
             $productId = get_post_meta((int) $line->post_id, '_vatly_product_id', true);
             if (! $productId) {
                 throw new IncompleteInformationException(
@@ -172,7 +172,7 @@ final class Processor
 
     private function resolveSubscriptionPlanId(object $order): string
     {
-        $line = $order->items[0] ?? null;
+        $line = $order->order_items[0] ?? null;
         if (! $line) {
             throw new IncompleteInformationException('Missing subscription order line');
         }
@@ -239,13 +239,13 @@ final class Processor
      * `OrderTransaction::getReceiptPageUrl()` (the same canonical landing the
      * core PayPal/Stripe redirect gateways use). That page renders our
      * MoR receipt invoice-link injection. There is no FluentCart
-     * `payment_redirect_url` order property in free 1.3.28, so the previous base
+     * `payment_redirect_url` order property, so the previous base
      * (`$order->payment_redirect_url ?? home_url('/checkout/...')`) always fell
      * through to a guessed `/checkout/<outcome>` path that isn't a real route.
      *
-     * verified: FluentCart free 1.3.28 — app/Models/OrderTransaction.php:176
-     * (`getReceiptPageUrl()`), used as the post-payment `redirect_url` by
-     * app/Modules/PaymentMethods/PayPalGateway/PayPal.php:218.
+     * verified: FluentCart free 2.2.0 — app/Models/OrderTransaction.php:225
+     * (`getReceiptPageUrl()`); confirmed end-to-end: the hosted-checkout return
+     * lands the customer on the receipt page.
      */
     private function returnUrl(object $order, object $transaction, string $outcome): string
     {

@@ -179,9 +179,16 @@ final class MockVatly
             ? (string) $products[0]['id']
             : 'plan_unknown';
 
+        // One-off and subscription checkouts both arrive as `products[]`; the
+        // id prefix is what distinguishes them (one_off_product_… vs
+        // subscription_plan_…). Only a real subscription plan drives the
+        // subscription.started webhook on payment.
+        $is_subscription = str_starts_with($plan_id, 'subscription_plan_');
+
         $checkout = [
             'resource'            => 'checkout',
             'id'                  => $id,
+            'isSubscription'      => $is_subscription,
             'status'              => 'open',
             'customerId'          => (string) ($body['customerId'] ?? ''),
             'redirectUrlSuccess'  => (string) ($body['redirectUrlSuccess'] ?? ''),
@@ -190,7 +197,8 @@ final class MockVatly
             'metadata'            => $body['metadata'] ?? null,
             'href'                => self::HOSTED_BASE . '/' . $id,
             'links'               => [
-                'checkoutUrl' => ['href' => self::HOSTED_BASE . '/' . $id],
+                // vatly-api-php's Link type requires both href and type.
+                'checkoutUrl' => ['href' => self::HOSTED_BASE . '/' . $id, 'type' => 'text/html'],
             ],
             'createdAt'           => date('c'),
             'testmode'            => true,
@@ -218,17 +226,8 @@ final class MockVatly
     /** @return array<string, mixed> */
     private function get_subscription(string $id): array
     {
-        return $this->load('subscriptions', $id) ?? [
-            'resource'           => 'subscription',
-            'id'                 => $id,
-            'subscriptionPlanId' => 'plan_local_dev',
-            'name'               => 'Mock Subscription',
-            'quantity'           => 1,
-            'status'             => 'active',
-            'cancelledAt'        => null,
-            'endedAt'            => null,
-            'testmode'           => true,
-        ];
+        return $this->load('subscriptions', $id)
+            ?? $this->subscription_payload($id, 'customer_unknown', 'subscription_plan_local_dev');
     }
 
     /** @return array<string, mixed> */
@@ -289,15 +288,26 @@ final class MockVatly
             'resource'           => 'order',
             'id'                 => $id,
             'status'             => 'paid',
+            'createdAt'          => date('c'),
             'invoiceNumber'      => 'INV-' . substr($id, 0, 6),
             'paymentMethod'      => 'creditcard',
             'customerId'         => $customerId,
+            'customerDetails'    => $this->address(),
             'total'              => ['value' => '23.00', 'currency' => 'EUR'],
             'subtotal'           => ['value' => '19.00', 'currency' => 'EUR'],
             'reversedSubtotal'   => ['value' => '0.00', 'currency' => 'EUR'],
             'refundableSubtotal' => ['value' => '19.00', 'currency' => 'EUR'],
             'taxSummary'         => $this->tax_summary(),
             'lines'              => $this->order_lines($id, $lineCount),
+            // vatly-api-php's Link type requires both href and type. The
+            // customerInvoice link is the legally valid MoR invoice the
+            // gateway stamps onto the FluentCart order.
+            'links'              => [
+                'customerInvoice' => [
+                    'href' => self::HOSTED_BASE . '/invoice/' . $id . '.pdf',
+                    'type' => 'application/pdf',
+                ],
+            ],
             'testmode'           => true,
         ];
 
@@ -349,6 +359,70 @@ final class MockVatly
                 'taxRate' => ['name' => 'NL standard', 'percentage' => 21.0, 'taxablePercentage' => 100.0],
                 'amount'  => ['value' => '4.00', 'currency' => 'EUR'],
             ],
+        ];
+    }
+
+    /**
+     * A full `Address` shape (all keys the api-php Address type carries), so a
+     * resource that hydrates an Address never reads an uninitialized property.
+     *
+     * @return array<string, mixed>
+     */
+    private function address(): array
+    {
+        return [
+            'fullName'         => 'Mock Customer',
+            'streetAndNumber'  => 'Keizersgracht 123',
+            'streetAdditional' => '',
+            'postalCode'       => '1015 CJ',
+            'city'             => 'Amsterdam',
+            'region'           => '',
+            'countryCode'      => 'NL',
+            'country'          => 'Netherlands',
+            'companyName'      => '',
+            'taxId'            => '',
+            'email'            => 'customer@example.com',
+        ];
+    }
+
+    /**
+     * Canonical subscription payload, shaped to hydrate cleanly through
+     * api-php's `Subscription` resource (every non-nullable typed property is
+     * populated: testmode, basePrice/Money, billingAddress/Address, interval,
+     * status, startedAt, and a `customer` link — SubscriptionLinks requires it).
+     *
+     * @param  array<string, mixed>|null $metadata
+     * @return array<string, mixed>
+     */
+    private function subscription_payload(string $id, string $customerId, string $planId, $metadata = null): array
+    {
+        return [
+            'resource'           => 'subscription',
+            'id'                 => $id,
+            'customerId'         => $customerId,
+            'subscriptionPlanId' => $planId,
+            'testmode'           => true,
+            'name'               => 'Mock Subscription',
+            'description'        => 'Mock subscription for local dev',
+            'billingAddress'     => $this->address(),
+            'basePrice'          => ['value' => '19.00', 'currency' => 'EUR'],
+            'quantity'           => 1,
+            'interval'           => 'month',
+            'intervalCount'      => 1,
+            'status'             => 'active',
+            'startedAt'          => date('c'),
+            'endedAt'            => null,
+            'canceledAt'         => null,
+            'cancelledAt'        => null,
+            'renewedAt'          => null,
+            'renewedUntil'       => null,
+            'nextRenewalAt'      => null,
+            'trialUntil'         => null,
+            'mandate'            => ['method' => 'creditcard', 'maskedIdentifier' => '4242'],
+            'links'              => [
+                'customer' => ['href' => self::HOSTED_BASE . '/portal/' . $id, 'type' => 'text/html'],
+            ],
+            'metadata'           => $metadata,
         ];
     }
 
@@ -449,44 +523,37 @@ final class MockVatly
             $this->store('checkouts', $checkout_id, $checkout);
 
             // Store the order so subsequent /v1/orders/{id} requests work.
-            $this->store('orders', $checkout['orderId'], $this->order_payload(
+            // vatly-api-php's OrderPaid event hydrates straight from the signed
+            // webhook `object` (it is byte-identical to GET /orders/{id}), so
+            // the webhook object must be this full order resource, not a stub.
+            $order = $this->order_payload(
                 $checkout['orderId'],
                 (string) $checkout['customerId'],
                 1,
                 ['metadata' => $checkout['metadata'] ?? null]
-            ));
-
-            // Create a subscription so subsequent /v1/subscriptions/{id} works.
-            $sub_id = 'subscription_' . bin2hex(random_bytes(6));
-            $this->store('subscriptions', $sub_id, [
-                'resource'           => 'subscription',
-                'id'                 => $sub_id,
-                'subscriptionPlanId' => $checkout['planId'],
-                'name'               => 'Mock Subscription',
-                'quantity'           => 1,
-                'status'             => 'active',
-                'cancelledAt'        => null,
-                'endedAt'            => null,
-                'metadata'           => $checkout['metadata'] ?? null,
-                'testmode'           => true,
-            ]);
+            );
+            $this->store('orders', $checkout['orderId'], $order);
 
             $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
 
-            $this->emit_webhook($webhook_url, 'subscription.started', [
-                'id'                 => $sub_id,
-                'customerId'         => $checkout['customerId'],
-                'subscriptionPlanId' => $checkout['planId'],
-                'name'               => 'Mock Subscription',
-                'quantity'           => 1,
-                'metadata'           => $checkout['metadata'] ?? null,
-            ], 'subscription', $sub_id);
+            // Only a subscription checkout (a plan, not a one-off product)
+            // emits subscription.started. Firing it for a one-off would be
+            // wrong (and the SubscriptionStarted event requires a plan id +
+            // full subscription resource).
+            if (! empty($checkout['isSubscription'])) {
+                $sub_id = 'subscription_' . bin2hex(random_bytes(6));
+                $subscription = $this->subscription_payload(
+                    $sub_id,
+                    (string) $checkout['customerId'],
+                    (string) $checkout['planId'],
+                    $checkout['metadata'] ?? null
+                );
+                $this->store('subscriptions', $sub_id, $subscription);
 
-            $this->emit_webhook($webhook_url, 'order.paid', [
-                'id'         => $checkout['orderId'],
-                'customerId' => $checkout['customerId'],
-                'metadata'   => $checkout['metadata'] ?? null,
-            ], 'order', $checkout['orderId']);
+                $this->emit_webhook($webhook_url, 'subscription.started', $subscription, 'subscription', $sub_id);
+            }
+
+            $this->emit_webhook($webhook_url, 'order.paid', $order, 'order', $checkout['orderId']);
 
             header('Location: ' . $checkout['redirectUrlSuccess']);
 

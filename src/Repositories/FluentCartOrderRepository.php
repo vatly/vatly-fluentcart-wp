@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Repositories;
 
+use FluentCart\App\Helpers\Status;
+use FluentCart\App\Helpers\StatusHelper;
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
-use FluentCart\App\Services\Payments\Confirmations;
-use FluentCart\App\Services\Subscription\SubscriptionRenewal;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
 use Vatly\Fluent\Contracts\OrderInterface;
 use Vatly\Fluent\Contracts\OrderRepositoryInterface;
@@ -151,16 +152,24 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->orphanWrapper($data);
         }
 
-        (new Confirmations())->confirmPaymentSuccessByCharge(
-            $transaction,
-            [
-                'vendor_charge_id' => $data->vatlyId,
-                'invoice_number'   => $data->invoiceNumber,
-                'amount'           => $data->total,
-                'currency'         => $data->currency,
-                'payment_method'   => 'vatly',
-            ]
-        );
+        // FluentCart 2.2.0 has no shared payment-confirmation service: its
+        // Confirmations class is Stripe-specific. We follow the canonical idiom
+        // the first-party gateways use for an async/redirect return (see
+        // PayPalGateway\Processor::confirmPaymentSuccessByCharge and
+        // Cod\CodHandler): mark the charge transaction succeeded, then let
+        // StatusHelper claim the order's pending -> paid transition.
+        // `invoice_number` is intentionally not written here: it is not an
+        // OrderTransaction column in 2.2.0 (the Vatly invoice is surfaced via
+        // order meta by StampVatlyInvoiceOnPaid instead).
+        $transaction->fill([
+            'vendor_charge_id' => $data->vatlyId,
+            'payment_method'   => 'vatly',
+            'status'           => Status::TRANSACTION_SUCCEEDED,
+            'total'            => $data->total,
+            'currency'         => $data->currency,
+        ])->save();
+
+        (new StatusHelper($transaction->order))->syncOrderStatuses($transaction);
 
         // Reload so subsequent findByVatlyId hits the update branch.
         $transaction->refresh();
@@ -176,7 +185,7 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         // unrecorded, the subscription stays stuck in `failing`).
         $subscription = Subscription::query()
             ->where('customer_id', $data->hostCustomerId)
-            ->where('payment_method', 'vatly')
+            ->where('current_payment_method', 'vatly')
             ->whereIn('status', ['active', 'trialing', 'failing', 'past_due'])
             ->orderByDesc('id')
             ->first();
@@ -190,16 +199,25 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->orphanWrapper($data);
         }
 
-        SubscriptionRenewal::recordRenewalPayment(
-            $subscription,
+        // FluentCart 2.2.0 relocated renewal recording to the Subscriptions
+        // module's SubscriptionService and reordered the arguments: the
+        // transaction-data array is now first and the subscription second. The
+        // service creates the renewal child order + OrderTransaction (already
+        // succeeded) and advances the next billing date. We pass `total` (the
+        // old `amount` key no longer applies) and freeze the record's mode from
+        // the webhook payload. `invoice_number`/`status` are omitted: the
+        // service sets the transaction status itself, and invoice_number is not
+        // an OrderTransaction column.
+        SubscriptionService::recordRenewalPayment(
             [
-                'amount'           => $data->total,
+                'payment_method'   => 'vatly',
+                'payment_mode'     => $data->testmode ? 'test' : 'live',
+                'total'            => $data->total,
                 'currency'         => $data->currency,
                 'vendor_charge_id' => $data->vatlyId,
-                'invoice_number'   => $data->invoiceNumber,
-                'payment_method'   => 'vatly',
-                'status'           => 'completed',
-            ]
+            ],
+            $subscription,
+            []
         );
 
         // Symmetric counterpart to HandlePaymentFailedOnDunning: the gateway
