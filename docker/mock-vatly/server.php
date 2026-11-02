@@ -241,6 +241,12 @@ final class MockVatly
             'redirectUrlSuccess'  => (string) ($body['redirectUrlSuccess'] ?? ''),
             'redirectUrlCanceled' => (string) ($body['redirectUrlCanceled'] ?? ''),
             'planId'              => $plan_id,
+            // Carry the per-product trial (set by the gateway's subscription
+            // builder as products[0].trialDays) so the subscription resource
+            // can report a real trialUntil / nextRenewalAt at payment time.
+            'trialDays'           => (is_array($products) && isset($products[0]['trialDays']))
+                ? (int) $products[0]['trialDays']
+                : null,
             'metadata'            => $body['metadata'] ?? null,
             'href'                => self::HOSTED_BASE . '/' . $id,
             'links'               => [
@@ -441,8 +447,23 @@ final class MockVatly
      * @param  array<string, mixed>|null $metadata
      * @return array<string, mixed>
      */
-    private function subscription_payload(string $id, string $customerId, string $planId, $metadata = null): array
+    private function subscription_payload(string $id, string $customerId, string $planId, $metadata = null, ?int $trialDays = null): array
     {
+        $now = time();
+
+        // A trialing subscription takes its first charge at trial end, so
+        // nextRenewalAt == trialUntil during the trial; otherwise the next
+        // charge is one interval out. These drive the FluentCart row's
+        // next_billing_date / trial_ends_at once the gateway back-fills them
+        // from this resource (without them the admin shows "Invalid Date").
+        if ($trialDays !== null && $trialDays > 0) {
+            $trialUntil  = date('c', $now + $trialDays * 86400);
+            $nextRenewal = $trialUntil;
+        } else {
+            $trialUntil  = null;
+            $nextRenewal = date('c', strtotime('+1 month', $now) ?: $now);
+        }
+
         return [
             'resource'           => 'subscription',
             'id'                 => $id,
@@ -457,14 +478,14 @@ final class MockVatly
             'interval'           => 'month',
             'intervalCount'      => 1,
             'status'             => 'active',
-            'startedAt'          => date('c'),
+            'startedAt'          => date('c', $now),
             'endedAt'            => null,
             'canceledAt'         => null,
             'cancelledAt'        => null,
             'renewedAt'          => null,
-            'renewedUntil'       => null,
-            'nextRenewalAt'      => null,
-            'trialUntil'         => null,
+            'renewedUntil'       => $nextRenewal,
+            'nextRenewalAt'      => $nextRenewal,
+            'trialUntil'         => $trialUntil,
             'mandate'            => ['method' => 'creditcard', 'maskedIdentifier' => '4242'],
             'links'              => [
                 'customer' => ['href' => self::HOSTED_BASE . '/portal/' . $id, 'type' => 'text/html'],
@@ -621,7 +642,8 @@ final class MockVatly
                     $sub_id,
                     (string) $checkout['customerId'],
                     (string) $checkout['planId'],
-                    $checkout['metadata'] ?? null
+                    $checkout['metadata'] ?? null,
+                    isset($checkout['trialDays']) ? (int) $checkout['trialDays'] : null
                 );
                 $this->store('subscriptions', $sub_id, $subscription);
 

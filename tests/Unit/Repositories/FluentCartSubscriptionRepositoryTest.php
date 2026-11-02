@@ -45,6 +45,61 @@ class FluentCartSubscriptionRepositoryTest extends TestCase
         return (new \ReflectionClass(Plugin::class))->newInstanceWithoutConstructor();
     }
 
+    public function test_billing_schedule_maps_vatly_trial_and_next_renewal(): void
+    {
+        // Regression for "Next renewal: Invalid Date": FluentCart creates the
+        // subscription row at checkout without a next billing date for a
+        // hosted-redirect gateway, so store() back-fills it from Vatly's
+        // authoritative dates. A null column renders as "Invalid Date".
+        $schedule = $this->billingSchedule((object) [
+            'trialUntil'    => '2026-11-09T14:41:37+00:00',
+            'nextRenewalAt' => '2026-11-09T14:41:37+00:00',
+        ]);
+
+        self::assertSame('2026-11-09 14:41:37', $schedule['next_billing_date']);
+        self::assertSame('2026-11-09 14:41:37', $schedule['trial_ends_at']);
+    }
+
+    public function test_billing_schedule_falls_back_to_trial_until_for_next_billing(): void
+    {
+        // During a trial the next charge is the trial end, so when Vatly reports
+        // trialUntil but no separate nextRenewalAt, next_billing_date falls back
+        // to the trial end rather than being left null.
+        $schedule = $this->billingSchedule((object) [
+            'trialUntil'    => '2026-12-01T00:00:00+00:00',
+            'nextRenewalAt' => null,
+        ]);
+
+        self::assertSame('2026-12-01 00:00:00', $schedule['next_billing_date']);
+        self::assertSame('2026-12-01 00:00:00', $schedule['trial_ends_at']);
+    }
+
+    public function test_billing_schedule_is_empty_when_vatly_gives_no_dates(): void
+    {
+        // No dates yet: leave the columns untouched rather than writing bogus
+        // values.
+        $schedule = $this->billingSchedule((object) ['trialUntil' => null, 'nextRenewalAt' => null]);
+
+        self::assertSame([], $schedule);
+    }
+
+    /**
+     * Exercise the private billing-schedule mapper directly — it's a pure
+     * function of the Vatly subscription resource, so no API seam is needed.
+     *
+     * @return array<string, string>
+     */
+    private function billingSchedule(object $vatlySubscription): array
+    {
+        $method = new \ReflectionMethod(FluentCartSubscriptionRepository::class, 'billingScheduleFrom');
+        $method->setAccessible(true);
+
+        /** @var array<string, string> $result */
+        $result = $method->invoke(new FluentCartSubscriptionRepository($this->plugin()), $vatlySubscription);
+
+        return $result;
+    }
+
     public function test_update_writes_plan_name_and_quantity_when_provided(): void
     {
         $row = Mockery::mock(Subscription::class);
