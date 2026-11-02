@@ -104,12 +104,20 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
         if ($data->status !== null) {
             $dirty['status'] = self::toFluentCartStatus($data->status);
         }
-        if ($data->total !== null) {
-            $dirty['total'] = $data->total;
-        }
-        if ($data->currency !== null) {
-            $dirty['currency'] = $data->currency;
-        }
+
+        // Merchant-of-Record accounting: we deliberately do NOT overwrite the
+        // refund row's `total`/`currency` with the Vatly refund resource's
+        // figures. Vatly is the Merchant of Record, so the Vatly refund total is
+        // the gross (tax-inclusive) amount Vatly returned to the customer (net +
+        // VAT), whereas FluentCart records the merchant's own NET refund — the
+        // amount RefundService stamped at initiation, matching the net charge
+        // FluentCart booked for the order. Writing Vatly's gross here would make
+        // the refund row disagree with the order's own net refund total and with
+        // the charge side (which keeps FluentCart's net in confirmInitialPayment,
+        // not the Vatly gross). Vatly's gross/VAT and the legal credit note are
+        // surfaced separately via refund meta (see
+        // StampVatlyCreditNoteOnRefundCompleted). This reaction only owns the
+        // status transition (pending -> refunded / failed).
 
         if ($dirty !== []) {
             $row->fill($dirty)->save();

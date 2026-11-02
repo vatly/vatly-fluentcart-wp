@@ -109,12 +109,35 @@ class FluentCartRefundRepositoryTest extends TestCase
         $this->assertHookExpectations();
     }
 
-    public function test_update_writes_total_and_currency_when_provided(): void
+    public function test_update_ignores_vatly_gross_total_and_currency(): void
     {
-        $row = $this->makeRowMock(expectFill: ['total' => 750, 'currency' => 'EUR']);
+        // MoR accounting: the Vatly refund resource carries the gross (tax-inclusive)
+        // amount Vatly returned to the customer, but FluentCart's refund row must
+        // keep the NET amount RefundService stamped at initiation. A status-only
+        // webhook (total/currency present, no status) must therefore not touch the
+        // row at all.
+        $row = Mockery::mock(OrderTransaction::class);
+        $row->shouldNotReceive('fill');
+        $row->shouldNotReceive('save');
+
         (new FluentCartRefundRepository())->update(
             new FluentCartRefund($row),
-            new UpdateRefundData(total: 750, currency: 'EUR'),
+            new UpdateRefundData(total: 2300, currency: 'EUR'),
+        );
+
+        $this->assertHookExpectations();
+    }
+
+    public function test_update_syncs_status_only_even_when_gross_total_is_present(): void
+    {
+        // The common refund.completed case: Vatly sends the terminal status plus
+        // its gross total. Only the status transition is applied; the gross total
+        // is dropped so the row keeps FluentCart's net refund figure.
+        $row = $this->makeRowMock(expectFill: ['status' => 'refunded']);
+
+        (new FluentCartRefundRepository())->update(
+            new FluentCartRefund($row),
+            new UpdateRefundData(status: 'refunded', total: 2300, currency: 'EUR'),
         );
 
         $this->assertHookExpectations();
