@@ -664,15 +664,31 @@ final class MockVatly
     }
 
     // --- Tiny state store ---
+    //
+    // We run several `php -S` worker processes (PHP_CLI_SERVER_WORKERS) so a
+    // webhook delivered during the hosted-checkout "pay" request can be handled
+    // while that request is still open (the gateway's webhook handler calls back
+    // into this mock). Those workers share a single JSON state file, so the
+    // store must be concurrency-safe:
+    //
+    //   - store() serializes the whole read-modify-write under an exclusive lock
+    //     so concurrent writes (e.g. the order write and a customer binding
+    //     write) can't clobber each other.
+    //   - writes are atomic (temp file + rename), so a reader never sees a
+    //     half-written file. Without this, a torn read made the order.paid
+    //     handler's GetOrder fall back to a metadata-less synthesized order,
+    //     which skipped payment confirmation intermittently.
 
     /** @param array<string, mixed> $value */
     private function store(string $bucket, string $id, array $value): void
     {
-        $state               = $this->state();
-        $state[$bucket]      = $state[$bucket] ?? [];
-        $state[$bucket][$id] = $value;
+        $this->withStateLock(function () use ($bucket, $id, $value): void {
+            $state               = $this->state();
+            $state[$bucket]      = $state[$bucket] ?? [];
+            $state[$bucket][$id] = $value;
 
-        file_put_contents($this->stateFile(), json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+            $this->writeStateAtomically($state);
+        });
     }
 
     /** @return array<string, mixed>|null */
@@ -692,7 +708,39 @@ final class MockVatly
             return [];
         }
 
+        // Atomic rename on write guarantees this read sees a complete file.
         return json_decode((string) file_get_contents($file), true) ?: [];
+    }
+
+    /**
+     * Run $fn while holding an exclusive lock on a dedicated lock file, so the
+     * read-modify-write in store() is serialized across worker processes.
+     */
+    private function withStateLock(callable $fn): void
+    {
+        $lockHandle = fopen($this->stateFile() . '.lock', 'c');
+        if ($lockHandle === false) {
+            $fn();
+            return;
+        }
+
+        flock($lockHandle, LOCK_EX);
+        try {
+            $fn();
+        } finally {
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
+        }
+    }
+
+    /** @param array<string, array<string, mixed>> $state */
+    private function writeStateAtomically(array $state): void
+    {
+        $file = $this->stateFile();
+        $tmp  = $file . '.' . getmypid() . '.tmp';
+
+        file_put_contents($tmp, json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+        rename($tmp, $file);
     }
 
     /** @return array<string, mixed> */

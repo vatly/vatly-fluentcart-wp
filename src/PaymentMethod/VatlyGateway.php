@@ -76,6 +76,34 @@ final class VatlyGateway extends AbstractPaymentGateway
     }
 
     /**
+     * Front-end checkout handler.
+     *
+     * FluentCart 2.2.0 keeps the "Place order" button disabled for the selected
+     * payment method until that method's own script enables it (via the payment
+     * loader dispatched on `fluent_cart_load_payments_<route>`). A gateway that
+     * ships no script leaves the button permanently disabled. Vatly is a hosted
+     * redirect gateway with nothing to prepare on-page, so we enqueue a tiny
+     * handler that just enables the button (same pattern as FluentCart's COD
+     * gateway). Enqueued by AbstractPaymentGateway::enqueue() via prepare().
+     *
+     * verified: FluentCart free 2.2.0 — Cod::getEnqueueScriptSrc()
+     * (app/Modules/PaymentMethods/Cod/Cod.php) and the payment-loader gate.
+     *
+     * @param string $hasSubscription
+     * @return array<int, array<string, mixed>>
+     */
+    public function getEnqueueScriptSrc($hasSubscription = 'no'): array
+    {
+        return [
+            [
+                'handle'    => 'vatly-for-fluentcart-checkout',
+                'src'       => VATLY_FLUENTCART_URL . 'assets/vatly-checkout.js',
+                'in_footer' => true,
+            ],
+        ];
+    }
+
+    /**
      * Whether the gateway is enabled for checkout.
      *
      * FluentCart's AbstractPaymentGateway::isEnabled() checks
