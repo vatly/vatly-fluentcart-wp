@@ -57,10 +57,53 @@ final class MockVatly
 
         if ($response === null) {
             // Routes like hosted_page() write their own response.
+            $this->flushDeferredWebhooks();
+
             return;
         }
 
-        echo json_encode($response, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        $body = json_encode($response, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        header('Content-Length: ' . strlen($body));
+        echo $body;
+
+        // Send the response to the caller BEFORE delivering any deferred
+        // webhooks. Vatly delivers events like refund.completed out of band,
+        // after the API response — so the caller (the gateway) has already
+        // recorded its local refund row by the time the webhook arrives.
+        // Delivering it inline would race that write. The brief sleep inside
+        // flushDeferredWebhooks() gives the caller time to persist.
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        } else {
+            flush();
+        }
+
+        $this->flushDeferredWebhooks();
+    }
+
+    /** @var array<int, array{url:string,event:string,object:array<string,mixed>,type:string,id:string}> */
+    private array $deferredWebhooks = [];
+
+    /** @param array<string, mixed> $object */
+    private function defer_webhook(string $url, string $event, array $object, string $type, string $id): void
+    {
+        $this->deferredWebhooks[] = compact('url', 'event', 'object', 'type', 'id');
+    }
+
+    private function flushDeferredWebhooks(): void
+    {
+        if ($this->deferredWebhooks === []) {
+            return;
+        }
+
+        // Let the caller finish persisting its local record first.
+        usleep(300000);
+
+        foreach ($this->deferredWebhooks as $hook) {
+            $this->emit_webhook($hook['url'], $hook['event'], $hook['object'], $hook['type'], $hook['id']);
+        }
+
+        $this->deferredWebhooks = [];
     }
 
     /**
@@ -92,6 +135,10 @@ final class MockVatly
 
         if ($method === 'DELETE' && preg_match('#^/v1/subscriptions/(.+)$#', $path, $m)) {
             return $this->cancel_subscription($m[1]);
+        }
+
+        if ($method === 'GET' && preg_match('#^/v1/refunds/(.+)$#', $path, $m)) {
+            return $this->get_refund($m[1]);
         }
 
         if ($method === 'GET' && preg_match('#^/v1/orders/(.+)$#', $path, $m)) {
@@ -426,29 +473,63 @@ final class MockVatly
         ];
     }
 
+    /**
+     * Canonical refund payload, shaped to hydrate cleanly through
+     * vatly-api-php's `Refund` resource (every non-nullable typed property is
+     * populated: customerId, total/subtotal Money, taxSummary, originalOrderId,
+     * lines, and a RefundLinks `originalOrder`). Vatly models a refund as a
+     * credit order; for the mock the credit order (`orderId`) points back at the
+     * original order, whose customerInvoice link serves as the credit note the
+     * gateway stamps onto the FluentCart refund.
+     *
+     * @return array<string, mixed>
+     */
+    private function refund_payload(string $refundId, string $originalOrderId, string $status, string $total): array
+    {
+        $order      = $this->load('orders', $originalOrderId);
+        $customerId = (string) ($order['customerId'] ?? 'customer_unknown');
+
+        return [
+            'resource'        => 'refund',
+            'id'              => $refundId,
+            'status'          => $status,
+            'createdAt'       => date('c'),
+            'testmode'        => true,
+            'total'           => ['value' => $total, 'currency' => 'EUR'],
+            'subtotal'        => ['value' => $total, 'currency' => 'EUR'],
+            'taxSummary'      => $this->tax_summary(),
+            'customerId'      => $customerId,
+            'lines'           => [],
+            'originalOrderId' => $originalOrderId,
+            'orderId'         => $originalOrderId,
+            'links'           => [
+                'originalOrder' => ['href' => self::HOSTED_BASE . '/' . $originalOrderId, 'type' => 'text/html'],
+                'order'         => ['href' => self::HOSTED_BASE . '/' . $originalOrderId, 'type' => 'text/html'],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function get_refund(string $id): array
+    {
+        return $this->load('refunds', $id)
+            ?? $this->refund_payload($id, 'order_unknown', 'refunded', '23.00');
+    }
+
     /** @return array<string, mixed> */
     private function full_refund(string $orderId): array
     {
         $refundId = 'refund_' . bin2hex(random_bytes(6));
 
-        $refund = [
-            'resource'      => 'refund',
-            'id'            => $refundId,
-            'orderId'       => $orderId,
-            'status'        => 'refunded',
-            'total'         => ['value' => '23.00', 'currency' => 'EUR'],
-            'createdAt'     => date('c'),
-            'testmode'      => true,
-        ];
+        $refund = $this->refund_payload($refundId, $orderId, 'refunded', '23.00');
 
         $this->store('refunds', $refundId, $refund);
 
-        // Fire a refund webhook to mirror real Vatly behaviour. The plugin
-        // doesn't strictly need it (the createFullRefund call returns the
-        // status directly), but it's useful for end-to-end testing of the
-        // refund webhook reaction path.
+        // Deliver refund.completed AFTER this API response (see handle()), the
+        // way Vatly delivers it out of band, so the gateway has recorded its
+        // local refund row before the credit-note reaction runs.
         $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
-        $this->emit_webhook($webhook_url, 'refund.completed', $refund, 'refund', $refundId);
+        $this->defer_webhook($webhook_url, 'refund.completed', $refund, 'refund', $refundId);
 
         return $refund;
     }
@@ -484,18 +565,12 @@ final class MockVatly
 
         $refundId = 'refund_' . bin2hex(random_bytes(6));
 
-        $refund = [
-            'resource'     => 'refund',
-            'id'           => $refundId,
-            'orderId'      => $orderId,
-            'status'       => 'pending',
-            'total'        => ['value' => $total, 'currency' => $currency],
-            'createdAt'    => date('c'),
-            'testmode'     => true,
-            // Not part of the real Refund resource — a test seam so the
-            // integration suite can assert the SDK posted the right `items`.
-            'requestItems' => $items,
-        ];
+        $refund = $this->refund_payload($refundId, $orderId, 'pending', $total);
+        $refund['total']['currency']    = $currency;
+        $refund['subtotal']['currency'] = $currency;
+        // Not part of the real Refund resource — a test seam so the integration
+        // suite can assert the SDK posted the right `items`.
+        $refund['requestItems'] = $items;
 
         $this->store('refunds', $refundId, $refund);
 
