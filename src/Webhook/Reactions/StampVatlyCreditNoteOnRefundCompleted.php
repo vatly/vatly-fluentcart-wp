@@ -16,7 +16,7 @@ use Vatly\FluentCart\Plugin;
  * legally-valid Vatly credit note instead of FluentCart's own draft.
  *
  * Symmetric to {@see StampVatlyInvoiceOnPaid} for orders. The credit note
- * isn't surfaced as a first-class link on the Refund resource — vatlify
+ * isn't surfaced as a first-class link on the Refund resource — Vatly
  * models refunds as credit orders, so the "credit note" is just the
  * customerInvoice of the related credit order. Path:
  *
