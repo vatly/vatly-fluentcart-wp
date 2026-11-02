@@ -62,18 +62,40 @@ namespace FluentCart\App {
          */
         public static array $nextResults = [];
 
-        /** Reset the staged-result queue (call in test setUp/tearDown). */
-        public static function reset(): void { self::$nextResults = []; }
+        /**
+         * phpunit-only test seam: every where/orWhere/whereIn hop is appended
+         * here, so a test can assert *how* a query was built — e.g. that a hex
+         * uuid is matched on the `uuid` column and never coerced onto the
+         * integer `id` column. PHPStan never inspects this.
+         *
+         * @var array<int, array{method: string, column: string, value: mixed}>
+         */
+        public static array $recordedCalls = [];
+
+        /** Reset the staged-result queue + recorded calls (call in test setUp/tearDown). */
+        public static function reset(): void { self::$nextResults = []; self::$recordedCalls = []; }
 
         /** @return static<TModel> */
-        public function where(string $column, mixed $value = null, mixed $extra = null): self { return $this; }
+        public function where(string $column, mixed $value = null, mixed $extra = null): self
+        {
+            self::$recordedCalls[] = ['method' => 'where', 'column' => $column, 'value' => $value];
+            return $this;
+        }
 
         /** @param array<int|string, mixed> $values
          *  @return static<TModel> */
-        public function whereIn(string $column, array $values): self { return $this; }
+        public function whereIn(string $column, array $values): self
+        {
+            self::$recordedCalls[] = ['method' => 'whereIn', 'column' => $column, 'value' => $values];
+            return $this;
+        }
 
         /** @return static<TModel> */
-        public function orWhere(string $column, mixed $value = null): self { return $this; }
+        public function orWhere(string $column, mixed $value = null): self
+        {
+            self::$recordedCalls[] = ['method' => 'orWhere', 'column' => $column, 'value' => $value];
+            return $this;
+        }
 
         /** @return static<TModel> */
         public function orWhereHas(string $column, \Closure $callback): self { return $this; }

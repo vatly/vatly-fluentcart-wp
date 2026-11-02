@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Tests\Unit\Repositories;
 
+use FluentCart\App\Builder;
 use FluentCart\App\Models\OrderTransaction;
 use Mockery;
 use Vatly\Fluent\Contracts\OrderInterface;
+use Vatly\Fluent\Data\StoreOrderData;
 use Vatly\Fluent\Data\UpdateOrderData;
 use Vatly\FluentCart\Models\FluentCartOrder;
 use Vatly\FluentCart\Plugin;
@@ -113,6 +115,89 @@ class FluentCartOrderRepositoryTest extends TestCase
         );
 
         $this->assertHookExpectations();
+    }
+
+    protected function tearDown(): void
+    {
+        Builder::reset();
+        parent::tearDown();
+    }
+
+    /**
+     * Regression for the wrong-transaction confirmation bug: `confirmInitialPayment`
+     * used to resolve the transaction with `where('uuid', $id)->orWhere('id', $id)`.
+     * Because `fluentcart_transaction_id` is a 32-char hex uuid and `id` is an
+     * integer column, MySQL coerced e.g. `"1b9c29a0..."` to its leading integer (1)
+     * and confirmed transaction #1 instead of the real one — presenting as
+     * intermittent "Payment Pending". The fix matches on `uuid` and only adds
+     * `orWhere('id', ...)` when the value is numeric. Assert a hex uuid never
+     * touches the `id` column.
+     */
+    public function test_confirm_initial_payment_matches_uuid_without_coercing_a_hex_id(): void
+    {
+        Builder::reset();
+
+        $uuid = '1b9c29a0e4f14d2e9a7c3b8f5d6e7a90'; // hex, leading digit — the coercion trap
+        $tx = new OrderTransaction();
+        $tx->id = 1;
+        $tx->uuid = $uuid;
+        Builder::$nextResults = [$tx];
+
+        (new FluentCartOrderRepository($this->plugin()))->store(
+            $this->storeData(['fluentcart_transaction_id' => $uuid]),
+        );
+
+        $idColumnCalls = array_values(array_filter(
+            Builder::$recordedCalls,
+            static fn (array $c): bool => $c['column'] === 'id',
+        ));
+        self::assertSame([], $idColumnCalls, 'a hex uuid must never be matched against the integer id column');
+
+        $uuidCalls = array_values(array_filter(
+            Builder::$recordedCalls,
+            static fn (array $c): bool => $c['method'] === 'where' && $c['column'] === 'uuid' && $c['value'] === $uuid,
+        ));
+        self::assertCount(1, $uuidCalls, 'the transaction must be resolved by its uuid');
+    }
+
+    /**
+     * The flip side: a purely numeric `fluentcart_transaction_id` (a transaction
+     * with no uuid, stamped with its integer id at checkout) must still be
+     * matched on the `id` column via the guarded `orWhere`.
+     */
+    public function test_confirm_initial_payment_also_matches_a_numeric_id(): void
+    {
+        Builder::reset();
+
+        $tx = new OrderTransaction();
+        $tx->id = 7;
+        Builder::$nextResults = [$tx];
+
+        (new FluentCartOrderRepository($this->plugin()))->store(
+            $this->storeData(['fluentcart_transaction_id' => '7']),
+        );
+
+        $idOrWhere = array_values(array_filter(
+            Builder::$recordedCalls,
+            static fn (array $c): bool => $c['method'] === 'orWhere' && $c['column'] === 'id' && $c['value'] === 7,
+        ));
+        self::assertCount(1, $idOrWhere, 'a numeric transaction id must still be matched on the id column (as an int)');
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function storeData(array $metadata): StoreOrderData
+    {
+        return new StoreOrderData(
+            vatlyId: 'order_vatly_1',
+            customerId: 'cus_1',
+            status: 'paid',
+            total: 1900,
+            currency: 'EUR',
+            testmode: true,
+            metadata: $metadata,
+        );
     }
 
     public function test_update_canceled_plus_field_changes_combines_into_one_save(): void
