@@ -580,10 +580,11 @@ final class MockVatly
                 <p class="kv">Checkout: <code><?= htmlspecialchars($checkout_id) ?></code></p>
                 <p class="kv">Customer: <code><?= htmlspecialchars((string) ($checkout['customerId'] ?? '')) ?></code></p>
                 <p class="kv">Plan: <code><?= htmlspecialchars((string) ($checkout['planId'] ?? '')) ?></code></p>
+                <p class="kv">Net &euro;19.00 + VAT &euro;4.00 (computed &amp; collected by Vatly as Merchant of Record) = <strong>&euro;23.00</strong></p>
                 <p>
                     <form method="get">
                         <input type="hidden" name="action" value="pay">
-                        <button type="submit">Pay &euro;19.00</button>
+                        <button type="submit">Pay &euro;23.00</button>
                         <a class="cancel" href="<?= htmlspecialchars((string) $checkout['redirectUrlCanceled']) ?>">
                             <button type="button" class="cancel">Cancel</button>
                         </a>

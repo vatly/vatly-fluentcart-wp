@@ -66,6 +66,24 @@ final class StampVatlyInvoiceOnPaid implements WebhookReactionInterface
         if ($invoiceUrl !== null) {
             $order->updateMeta('_vatly_invoice_url', $invoiceUrl);
         }
-        $order->updateMeta('_vatly_mor_disclosure', __('This purchase was processed by Vatly as Merchant of Record. The legally valid invoice is provided by Vatly.', 'vatly-for-fluentcart'));
+
+        // Tax transparency for the merchant: Vatly is the Merchant of Record and
+        // computes/charges the VAT, so the gross (tax-inclusive) amount the
+        // customer paid Vatly and the VAT itself are not in FluentCart's own
+        // books (FluentCart records the merchant's net sale). Surface Vatly's
+        // figures as order meta so the merchant can see what Vatly charged and
+        // the tax it handled, without FluentCart double-counting it.
+        $currency = (string) ($vatlyOrder->total->currency ?? '');
+        $grossTotal = isset($vatlyOrder->total->value) ? (float) $vatlyOrder->total->value : null;
+        $subtotal = isset($vatlyOrder->subtotal->value) ? (float) $vatlyOrder->subtotal->value : null;
+
+        if ($grossTotal !== null) {
+            $order->updateMeta('_vatly_gross_total', number_format($grossTotal, 2, '.', '') . ' ' . $currency);
+        }
+        if ($grossTotal !== null && $subtotal !== null) {
+            $order->updateMeta('_vatly_tax_total', number_format(max(0.0, $grossTotal - $subtotal), 2, '.', '') . ' ' . $currency);
+        }
+
+        $order->updateMeta('_vatly_mor_disclosure', __('This purchase was processed by Vatly as Merchant of Record. Vatly charged and handles the VAT, and provides the legally valid invoice.', 'vatly-for-fluentcart'));
     }
 }
