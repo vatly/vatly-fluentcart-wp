@@ -100,6 +100,22 @@ class FluentCartSubscriptionRepositoryTest extends TestCase
         return $result;
     }
 
+    public function test_backfill_billing_schedule_skips_a_row_with_no_vatly_id(): void
+    {
+        // The backfill query only selects rows with a vendor id, but guard the
+        // entry point anyway: with nothing to resolve it returns false before
+        // ever reaching the Vatly API seam, so an un-linked row is a safe no-op.
+        $repository = new FluentCartSubscriptionRepository($this->plugin());
+
+        $empty                         = new Subscription();
+        $empty->vendor_subscription_id = '';
+        self::assertFalse($repository->backfillBillingSchedule($empty));
+
+        $null                         = new Subscription();
+        $null->vendor_subscription_id = null;
+        self::assertFalse($repository->backfillBillingSchedule($null));
+    }
+
     public function test_update_writes_plan_name_and_quantity_when_provided(): void
     {
         $row = Mockery::mock(Subscription::class);

@@ -139,6 +139,32 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
     }
 
     /**
+     * One-time backfill entry point (see
+     * {@see \Vatly\FluentCart\Support\SubscriptionBillingBackfill}): re-fetch
+     * the Vatly subscription for an already-linked FluentCart row and fill in
+     * billing-schedule columns an older build of store() left null. Reuses the
+     * same fetch + mapping + loop-guarded save as store(), so the date mapping
+     * lives in one place. Returns true when the row was updated, false when
+     * there's no Vatly id to resolve or Vatly reports no dates yet.
+     */
+    public function backfillBillingSchedule(Subscription $row): bool
+    {
+        $vatlyId = (string) ($row->vendor_subscription_id ?? '');
+        if ($vatlyId === '') {
+            return false;
+        }
+
+        $schedule = $this->billingScheduleFrom($this->fetchVatlySubscription($vatlyId));
+        if ($schedule === []) {
+            return false;
+        }
+
+        $this->saveSuppressingOutbound($row, $schedule);
+
+        return true;
+    }
+
+    /**
      * @param array<string, mixed> $dirty
      */
     private function saveSuppressingOutbound(Subscription $row, array $dirty): void

@@ -18,6 +18,8 @@ use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
 use Vatly\FluentCart\Support\InvoiceShortcodes;
 use Vatly\FluentCart\Support\MoRInvoiceGuard;
+use Vatly\FluentCart\Support\SubscriptionBillingBackfill;
+use Vatly\FluentCart\Support\Upgrader;
 use Vatly\FluentCart\Webhook\EventDispatcher;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReceived;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReversed;
@@ -70,6 +72,13 @@ final class Plugin
 
         add_action('fluent_cart/register_payment_methods', [$this, 'registerGateway']);
         add_action('fluent_cart/payments/subscription_canceled', [$this, 'propagateCancellation'], 10, 1);
+
+        // Schema upgrades + their background data migrations. Wired on every
+        // request (not admin-only): the version gate early-returns once stamped,
+        // and the migration's cron hook must be attached in the hook-less
+        // wp-cron context where the batch runner actually fires.
+        SubscriptionBillingBackfill::register();
+        (new Upgrader())->maybeUpgrade();
 
         (new SubscriptionController($this))->register();
 

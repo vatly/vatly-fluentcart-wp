@@ -63,6 +63,17 @@ namespace FluentCart\App {
         public static array $nextResults = [];
 
         /**
+         * phpunit-only test seam: each array staged here is returned by the
+         * next get() call, FIFO, so tests can drive code that resolves a batch
+         * of rows via `Model::query()->...->get()` without a real database.
+         * PHPStan never reaches this branch (the queue starts empty), so
+         * analysis still sees the conservative empty-array return below.
+         *
+         * @var array<int, array<int, object>>
+         */
+        public static array $nextCollections = [];
+
+        /**
          * phpunit-only test seam: every where/orWhere/whereIn hop is appended
          * here, so a test can assert *how* a query was built — e.g. that a hex
          * uuid is matched on the `uuid` column and never coerced onto the
@@ -72,8 +83,13 @@ namespace FluentCart\App {
          */
         public static array $recordedCalls = [];
 
-        /** Reset the staged-result queue + recorded calls (call in test setUp/tearDown). */
-        public static function reset(): void { self::$nextResults = []; self::$recordedCalls = []; }
+        /** Reset the staged-result queues + recorded calls (call in test setUp/tearDown). */
+        public static function reset(): void
+        {
+            self::$nextResults = [];
+            self::$nextCollections = [];
+            self::$recordedCalls = [];
+        }
 
         /** @return static<TModel> */
         public function where(string $column, mixed $value = null, mixed $extra = null): self
@@ -103,11 +119,53 @@ namespace FluentCart\App {
         /** @return static<TModel> */
         public function orderByDesc(string $column): self { return $this; }
 
+        /** @return static<TModel> */
+        public function whereNull(string $column): self
+        {
+            self::$recordedCalls[] = ['method' => 'whereNull', 'column' => $column, 'value' => null];
+            return $this;
+        }
+
+        /** @return static<TModel> */
+        public function whereNotNull(string $column): self
+        {
+            self::$recordedCalls[] = ['method' => 'whereNotNull', 'column' => $column, 'value' => null];
+            return $this;
+        }
+
+        /** @return static<TModel> */
+        public function orderBy(string $column, string $direction = 'asc'): self
+        {
+            self::$recordedCalls[] = ['method' => 'orderBy', 'column' => $column, 'value' => $direction];
+            return $this;
+        }
+
+        /** @return static<TModel> */
+        public function limit(int $count): self
+        {
+            self::$recordedCalls[] = ['method' => 'limit', 'column' => '', 'value' => $count];
+            return $this;
+        }
+
         /** @return TModel|null */
         public function first(): ?object { return $this->dequeue(); }
 
         /** @return TModel|null */
         public function find(int|string $id): ?object { return $this->dequeue(); }
+
+        /**
+         * Returns the next staged collection (FIFO), or an empty array.
+         *
+         * @return array<int, object>
+         */
+        public function get(): array
+        {
+            if (self::$nextCollections !== []) {
+                return array_shift(self::$nextCollections);
+            }
+
+            return [];
+        }
 
         /** @return TModel|null */
         private function dequeue(): ?object
