@@ -2,7 +2,7 @@
 
 # Vatly for FluentCart
 
-Accept payments through **Vatly** (a European Merchant of Record that handles VAT, invoicing, and compliance) directly inside [FluentCart](https://fluentcart.com).
+Accept payments through **Vatly**, the Merchant of Record for European software and digital products, directly inside [FluentCart](https://fluentcart.com). Vatly is the legal seller on every sale and handles payments, tax and compliance.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 ![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777bb4.svg)
