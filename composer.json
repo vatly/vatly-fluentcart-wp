@@ -1,6 +1,6 @@
 {
     "name": "vatly/vatly-for-fluentcart",
-    "description": "Vatly Merchant-of-Record payment gateway for FluentCart",
+    "description": "FluentCart payment gateway for Vatly, the Merchant of Record for European software and digital products",
     "type": "wordpress-plugin",
     "license": "MIT",
     "authors": [
