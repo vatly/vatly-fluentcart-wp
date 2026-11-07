@@ -57,10 +57,53 @@ final class MockVatly
 
         if ($response === null) {
             // Routes like hosted_page() write their own response.
+            $this->flushDeferredWebhooks();
+
             return;
         }
 
-        echo json_encode($response, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        $body = json_encode($response, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        header('Content-Length: ' . strlen($body));
+        echo $body;
+
+        // Send the response to the caller BEFORE delivering any deferred
+        // webhooks. Vatly delivers events like refund.completed out of band,
+        // after the API response — so the caller (the gateway) has already
+        // recorded its local refund row by the time the webhook arrives.
+        // Delivering it inline would race that write. The brief sleep inside
+        // flushDeferredWebhooks() gives the caller time to persist.
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        } else {
+            flush();
+        }
+
+        $this->flushDeferredWebhooks();
+    }
+
+    /** @var array<int, array{url:string,event:string,object:array<string,mixed>,type:string,id:string}> */
+    private array $deferredWebhooks = [];
+
+    /** @param array<string, mixed> $object */
+    private function defer_webhook(string $url, string $event, array $object, string $type, string $id): void
+    {
+        $this->deferredWebhooks[] = compact('url', 'event', 'object', 'type', 'id');
+    }
+
+    private function flushDeferredWebhooks(): void
+    {
+        if ($this->deferredWebhooks === []) {
+            return;
+        }
+
+        // Let the caller finish persisting its local record first.
+        usleep(300000);
+
+        foreach ($this->deferredWebhooks as $hook) {
+            $this->emit_webhook($hook['url'], $hook['event'], $hook['object'], $hook['type'], $hook['id']);
+        }
+
+        $this->deferredWebhooks = [];
     }
 
     /**
@@ -92,6 +135,10 @@ final class MockVatly
 
         if ($method === 'DELETE' && preg_match('#^/v1/subscriptions/(.+)$#', $path, $m)) {
             return $this->cancel_subscription($m[1]);
+        }
+
+        if ($method === 'GET' && preg_match('#^/v1/refunds/(.+)$#', $path, $m)) {
+            return $this->get_refund($m[1]);
         }
 
         if ($method === 'GET' && preg_match('#^/v1/orders/(.+)$#', $path, $m)) {
@@ -179,18 +226,32 @@ final class MockVatly
             ? (string) $products[0]['id']
             : 'plan_unknown';
 
+        // One-off and subscription checkouts both arrive as `products[]`; the
+        // id prefix is what distinguishes them (one_off_product_… vs
+        // subscription_plan_…). Only a real subscription plan drives the
+        // subscription.started webhook on payment.
+        $is_subscription = str_starts_with($plan_id, 'subscription_plan_');
+
         $checkout = [
             'resource'            => 'checkout',
             'id'                  => $id,
+            'isSubscription'      => $is_subscription,
             'status'              => 'open',
             'customerId'          => (string) ($body['customerId'] ?? ''),
             'redirectUrlSuccess'  => (string) ($body['redirectUrlSuccess'] ?? ''),
             'redirectUrlCanceled' => (string) ($body['redirectUrlCanceled'] ?? ''),
             'planId'              => $plan_id,
+            // Carry the per-product trial (set by the gateway's subscription
+            // builder as products[0].trialDays) so the subscription resource
+            // can report a real trialUntil / nextRenewalAt at payment time.
+            'trialDays'           => (is_array($products) && isset($products[0]['trialDays']))
+                ? (int) $products[0]['trialDays']
+                : null,
             'metadata'            => $body['metadata'] ?? null,
             'href'                => self::HOSTED_BASE . '/' . $id,
             'links'               => [
-                'checkoutUrl' => ['href' => self::HOSTED_BASE . '/' . $id],
+                // vatly-api-php's Link type requires both href and type.
+                'checkoutUrl' => ['href' => self::HOSTED_BASE . '/' . $id, 'type' => 'text/html'],
             ],
             'createdAt'           => date('c'),
             'testmode'            => true,
@@ -218,17 +279,8 @@ final class MockVatly
     /** @return array<string, mixed> */
     private function get_subscription(string $id): array
     {
-        return $this->load('subscriptions', $id) ?? [
-            'resource'           => 'subscription',
-            'id'                 => $id,
-            'subscriptionPlanId' => 'plan_local_dev',
-            'name'               => 'Mock Subscription',
-            'quantity'           => 1,
-            'status'             => 'active',
-            'cancelledAt'        => null,
-            'endedAt'            => null,
-            'testmode'           => true,
-        ];
+        return $this->load('subscriptions', $id)
+            ?? $this->subscription_payload($id, 'customer_unknown', 'subscription_plan_local_dev');
     }
 
     /** @return array<string, mixed> */
@@ -289,15 +341,26 @@ final class MockVatly
             'resource'           => 'order',
             'id'                 => $id,
             'status'             => 'paid',
+            'createdAt'          => date('c'),
             'invoiceNumber'      => 'INV-' . substr($id, 0, 6),
             'paymentMethod'      => 'creditcard',
             'customerId'         => $customerId,
+            'customerDetails'    => $this->address(),
             'total'              => ['value' => '23.00', 'currency' => 'EUR'],
             'subtotal'           => ['value' => '19.00', 'currency' => 'EUR'],
             'reversedSubtotal'   => ['value' => '0.00', 'currency' => 'EUR'],
             'refundableSubtotal' => ['value' => '19.00', 'currency' => 'EUR'],
             'taxSummary'         => $this->tax_summary(),
             'lines'              => $this->order_lines($id, $lineCount),
+            // vatly-api-php's Link type requires both href and type. The
+            // customerInvoice link is the legally valid MoR invoice the
+            // gateway stamps onto the FluentCart order.
+            'links'              => [
+                'customerInvoice' => [
+                    'href' => self::HOSTED_BASE . '/invoice/' . $id . '.pdf',
+                    'type' => 'application/pdf',
+                ],
+            ],
             'testmode'           => true,
         ];
 
@@ -352,29 +415,142 @@ final class MockVatly
         ];
     }
 
+    /**
+     * A full `Address` shape (all keys the api-php Address type carries), so a
+     * resource that hydrates an Address never reads an uninitialized property.
+     *
+     * @return array<string, mixed>
+     */
+    private function address(): array
+    {
+        return [
+            'fullName'         => 'Mock Customer',
+            'streetAndNumber'  => 'Keizersgracht 123',
+            'streetAdditional' => '',
+            'postalCode'       => '1015 CJ',
+            'city'             => 'Amsterdam',
+            'region'           => '',
+            'countryCode'      => 'NL',
+            'country'          => 'Netherlands',
+            'companyName'      => '',
+            'taxId'            => '',
+            'email'            => 'customer@example.com',
+        ];
+    }
+
+    /**
+     * Canonical subscription payload, shaped to hydrate cleanly through
+     * api-php's `Subscription` resource (every non-nullable typed property is
+     * populated: testmode, basePrice/Money, billingAddress/Address, interval,
+     * status, startedAt, and a `customer` link — SubscriptionLinks requires it).
+     *
+     * @param  array<string, mixed>|null $metadata
+     * @return array<string, mixed>
+     */
+    private function subscription_payload(string $id, string $customerId, string $planId, $metadata = null, ?int $trialDays = null): array
+    {
+        $now = time();
+
+        // A trialing subscription takes its first charge at trial end, so
+        // nextRenewalAt == trialUntil during the trial; otherwise the next
+        // charge is one interval out. These drive the FluentCart row's
+        // next_billing_date / trial_ends_at once the gateway back-fills them
+        // from this resource (without them the admin shows "Invalid Date").
+        if ($trialDays !== null && $trialDays > 0) {
+            $trialUntil  = date('c', $now + $trialDays * 86400);
+            $nextRenewal = $trialUntil;
+        } else {
+            $trialUntil  = null;
+            $nextRenewal = date('c', strtotime('+1 month', $now) ?: $now);
+        }
+
+        return [
+            'resource'           => 'subscription',
+            'id'                 => $id,
+            'customerId'         => $customerId,
+            'subscriptionPlanId' => $planId,
+            'testmode'           => true,
+            'name'               => 'Mock Subscription',
+            'description'        => 'Mock subscription for local dev',
+            'billingAddress'     => $this->address(),
+            'basePrice'          => ['value' => '19.00', 'currency' => 'EUR'],
+            'quantity'           => 1,
+            'interval'           => 'month',
+            'intervalCount'      => 1,
+            'status'             => 'active',
+            'startedAt'          => date('c', $now),
+            'endedAt'            => null,
+            'canceledAt'         => null,
+            'cancelledAt'        => null,
+            'renewedAt'          => null,
+            'renewedUntil'       => $nextRenewal,
+            'nextRenewalAt'      => $nextRenewal,
+            'trialUntil'         => $trialUntil,
+            'mandate'            => ['method' => 'creditcard', 'maskedIdentifier' => '4242'],
+            'links'              => [
+                'customer' => ['href' => self::HOSTED_BASE . '/portal/' . $id, 'type' => 'text/html'],
+            ],
+            'metadata'           => $metadata,
+        ];
+    }
+
+    /**
+     * Canonical refund payload, shaped to hydrate cleanly through
+     * vatly-api-php's `Refund` resource (every non-nullable typed property is
+     * populated: customerId, total/subtotal Money, taxSummary, originalOrderId,
+     * lines, and a RefundLinks `originalOrder`). Vatly models a refund as a
+     * credit order; for the mock the credit order (`orderId`) points back at the
+     * original order, whose customerInvoice link serves as the credit note the
+     * gateway stamps onto the FluentCart refund.
+     *
+     * @return array<string, mixed>
+     */
+    private function refund_payload(string $refundId, string $originalOrderId, string $status, string $total): array
+    {
+        $order      = $this->load('orders', $originalOrderId);
+        $customerId = (string) ($order['customerId'] ?? 'customer_unknown');
+
+        return [
+            'resource'        => 'refund',
+            'id'              => $refundId,
+            'status'          => $status,
+            'createdAt'       => date('c'),
+            'testmode'        => true,
+            'total'           => ['value' => $total, 'currency' => 'EUR'],
+            'subtotal'        => ['value' => $total, 'currency' => 'EUR'],
+            'taxSummary'      => $this->tax_summary(),
+            'customerId'      => $customerId,
+            'lines'           => [],
+            'originalOrderId' => $originalOrderId,
+            'orderId'         => $originalOrderId,
+            'links'           => [
+                'originalOrder' => ['href' => self::HOSTED_BASE . '/' . $originalOrderId, 'type' => 'text/html'],
+                'order'         => ['href' => self::HOSTED_BASE . '/' . $originalOrderId, 'type' => 'text/html'],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function get_refund(string $id): array
+    {
+        return $this->load('refunds', $id)
+            ?? $this->refund_payload($id, 'order_unknown', 'refunded', '23.00');
+    }
+
     /** @return array<string, mixed> */
     private function full_refund(string $orderId): array
     {
         $refundId = 'refund_' . bin2hex(random_bytes(6));
 
-        $refund = [
-            'resource'      => 'refund',
-            'id'            => $refundId,
-            'orderId'       => $orderId,
-            'status'        => 'refunded',
-            'total'         => ['value' => '23.00', 'currency' => 'EUR'],
-            'createdAt'     => date('c'),
-            'testmode'      => true,
-        ];
+        $refund = $this->refund_payload($refundId, $orderId, 'refunded', '23.00');
 
         $this->store('refunds', $refundId, $refund);
 
-        // Fire a refund webhook to mirror real Vatly behaviour. The plugin
-        // doesn't strictly need it (the createFullRefund call returns the
-        // status directly), but it's useful for end-to-end testing of the
-        // refund webhook reaction path.
+        // Deliver refund.completed AFTER this API response (see handle()), the
+        // way Vatly delivers it out of band, so the gateway has recorded its
+        // local refund row before the credit-note reaction runs.
         $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
-        $this->emit_webhook($webhook_url, 'refund.completed', $refund, 'refund', $refundId);
+        $this->defer_webhook($webhook_url, 'refund.completed', $refund, 'refund', $refundId);
 
         return $refund;
     }
@@ -410,18 +586,12 @@ final class MockVatly
 
         $refundId = 'refund_' . bin2hex(random_bytes(6));
 
-        $refund = [
-            'resource'     => 'refund',
-            'id'           => $refundId,
-            'orderId'      => $orderId,
-            'status'       => 'pending',
-            'total'        => ['value' => $total, 'currency' => $currency],
-            'createdAt'    => date('c'),
-            'testmode'     => true,
-            // Not part of the real Refund resource — a test seam so the
-            // integration suite can assert the SDK posted the right `items`.
-            'requestItems' => $items,
-        ];
+        $refund = $this->refund_payload($refundId, $orderId, 'pending', $total);
+        $refund['total']['currency']    = $currency;
+        $refund['subtotal']['currency'] = $currency;
+        // Not part of the real Refund resource — a test seam so the integration
+        // suite can assert the SDK posted the right `items`.
+        $refund['requestItems'] = $items;
 
         $this->store('refunds', $refundId, $refund);
 
@@ -449,44 +619,38 @@ final class MockVatly
             $this->store('checkouts', $checkout_id, $checkout);
 
             // Store the order so subsequent /v1/orders/{id} requests work.
-            $this->store('orders', $checkout['orderId'], $this->order_payload(
+            // vatly-api-php's OrderPaid event hydrates straight from the signed
+            // webhook `object` (it is byte-identical to GET /orders/{id}), so
+            // the webhook object must be this full order resource, not a stub.
+            $order = $this->order_payload(
                 $checkout['orderId'],
                 (string) $checkout['customerId'],
                 1,
                 ['metadata' => $checkout['metadata'] ?? null]
-            ));
-
-            // Create a subscription so subsequent /v1/subscriptions/{id} works.
-            $sub_id = 'subscription_' . bin2hex(random_bytes(6));
-            $this->store('subscriptions', $sub_id, [
-                'resource'           => 'subscription',
-                'id'                 => $sub_id,
-                'subscriptionPlanId' => $checkout['planId'],
-                'name'               => 'Mock Subscription',
-                'quantity'           => 1,
-                'status'             => 'active',
-                'cancelledAt'        => null,
-                'endedAt'            => null,
-                'metadata'           => $checkout['metadata'] ?? null,
-                'testmode'           => true,
-            ]);
+            );
+            $this->store('orders', $checkout['orderId'], $order);
 
             $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
 
-            $this->emit_webhook($webhook_url, 'subscription.started', [
-                'id'                 => $sub_id,
-                'customerId'         => $checkout['customerId'],
-                'subscriptionPlanId' => $checkout['planId'],
-                'name'               => 'Mock Subscription',
-                'quantity'           => 1,
-                'metadata'           => $checkout['metadata'] ?? null,
-            ], 'subscription', $sub_id);
+            // Only a subscription checkout (a plan, not a one-off product)
+            // emits subscription.started. Firing it for a one-off would be
+            // wrong (and the SubscriptionStarted event requires a plan id +
+            // full subscription resource).
+            if (! empty($checkout['isSubscription'])) {
+                $sub_id = 'subscription_' . bin2hex(random_bytes(6));
+                $subscription = $this->subscription_payload(
+                    $sub_id,
+                    (string) $checkout['customerId'],
+                    (string) $checkout['planId'],
+                    $checkout['metadata'] ?? null,
+                    isset($checkout['trialDays']) ? (int) $checkout['trialDays'] : null
+                );
+                $this->store('subscriptions', $sub_id, $subscription);
 
-            $this->emit_webhook($webhook_url, 'order.paid', [
-                'id'         => $checkout['orderId'],
-                'customerId' => $checkout['customerId'],
-                'metadata'   => $checkout['metadata'] ?? null,
-            ], 'order', $checkout['orderId']);
+                $this->emit_webhook($webhook_url, 'subscription.started', $subscription, 'subscription', $sub_id);
+            }
+
+            $this->emit_webhook($webhook_url, 'order.paid', $order, 'order', $checkout['orderId']);
 
             header('Location: ' . $checkout['redirectUrlSuccess']);
 
@@ -513,10 +677,11 @@ final class MockVatly
                 <p class="kv">Checkout: <code><?= htmlspecialchars($checkout_id) ?></code></p>
                 <p class="kv">Customer: <code><?= htmlspecialchars((string) ($checkout['customerId'] ?? '')) ?></code></p>
                 <p class="kv">Plan: <code><?= htmlspecialchars((string) ($checkout['planId'] ?? '')) ?></code></p>
+                <p class="kv">Net &euro;19.00 + VAT &euro;4.00 (computed &amp; collected by Vatly as Merchant of Record) = <strong>&euro;23.00</strong></p>
                 <p>
                     <form method="get">
                         <input type="hidden" name="action" value="pay">
-                        <button type="submit">Pay &euro;19.00</button>
+                        <button type="submit">Pay &euro;23.00</button>
                         <a class="cancel" href="<?= htmlspecialchars((string) $checkout['redirectUrlCanceled']) ?>">
                             <button type="button" class="cancel">Cancel</button>
                         </a>
@@ -597,15 +762,31 @@ final class MockVatly
     }
 
     // --- Tiny state store ---
+    //
+    // We run several `php -S` worker processes (PHP_CLI_SERVER_WORKERS) so a
+    // webhook delivered during the hosted-checkout "pay" request can be handled
+    // while that request is still open (the gateway's webhook handler calls back
+    // into this mock). Those workers share a single JSON state file, so the
+    // store must be concurrency-safe:
+    //
+    //   - store() serializes the whole read-modify-write under an exclusive lock
+    //     so concurrent writes (e.g. the order write and a customer binding
+    //     write) can't clobber each other.
+    //   - writes are atomic (temp file + rename), so a reader never sees a
+    //     half-written file. Without this, a torn read made the order.paid
+    //     handler's GetOrder fall back to a metadata-less synthesized order,
+    //     which skipped payment confirmation intermittently.
 
     /** @param array<string, mixed> $value */
     private function store(string $bucket, string $id, array $value): void
     {
-        $state               = $this->state();
-        $state[$bucket]      = $state[$bucket] ?? [];
-        $state[$bucket][$id] = $value;
+        $this->withStateLock(function () use ($bucket, $id, $value): void {
+            $state               = $this->state();
+            $state[$bucket]      = $state[$bucket] ?? [];
+            $state[$bucket][$id] = $value;
 
-        file_put_contents($this->stateFile(), json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+            $this->writeStateAtomically($state);
+        });
     }
 
     /** @return array<string, mixed>|null */
@@ -625,7 +806,39 @@ final class MockVatly
             return [];
         }
 
+        // Atomic rename on write guarantees this read sees a complete file.
         return json_decode((string) file_get_contents($file), true) ?: [];
+    }
+
+    /**
+     * Run $fn while holding an exclusive lock on a dedicated lock file, so the
+     * read-modify-write in store() is serialized across worker processes.
+     */
+    private function withStateLock(callable $fn): void
+    {
+        $lockHandle = fopen($this->stateFile() . '.lock', 'c');
+        if ($lockHandle === false) {
+            $fn();
+            return;
+        }
+
+        flock($lockHandle, LOCK_EX);
+        try {
+            $fn();
+        } finally {
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
+        }
+    }
+
+    /** @param array<string, array<string, mixed>> $state */
+    private function writeStateAtomically(array $state): void
+    {
+        $file = $this->stateFile();
+        $tmp  = $file . '.' . getmypid() . '.tmp';
+
+        file_put_contents($tmp, json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+        rename($tmp, $file);
     }
 
     /** @return array<string, mixed> */

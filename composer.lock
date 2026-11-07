@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "composer/ca-bundle",
-            "version": "1.5.14",
+            "version": "1.6.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/composer/ca-bundle.git",
-                "reference": "0c8abba0634f637bd78c4e451981da368d403463"
+                "reference": "0c64479fae6952ba4cf021a72c0ac530394c91d4"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/composer/ca-bundle/zipball/0c8abba0634f637bd78c4e451981da368d403463",
-                "reference": "0c8abba0634f637bd78c4e451981da368d403463",
+                "url": "https://api.github.com/repos/composer/ca-bundle/zipball/0c64479fae6952ba4cf021a72c0ac530394c91d4",
+                "reference": "0c64479fae6952ba4cf021a72c0ac530394c91d4",
                 "shasum": ""
             },
             "require": {
@@ -64,7 +64,7 @@
             "support": {
                 "irc": "irc://irc.freenode.org/composer",
                 "issues": "https://github.com/composer/ca-bundle/issues",
-                "source": "https://github.com/composer/ca-bundle/tree/1.5.14"
+                "source": "https://github.com/composer/ca-bundle/tree/1.6.1"
             },
             "funding": [
                 {
@@ -76,20 +76,21 @@
                     "type": "github"
                 }
             ],
-            "time": "2026-08-21T14:57:29+00:00"
+            "time": "2026-10-29T14:10:42+00:00",
+            "published-time": "2026-10-29T14:45:12+00:00"
         },
         {
             "name": "vatly/vatly-api-php",
-            "version": "v0.1.0-alpha.28",
+            "version": "v0.1.0-alpha.32",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-api-php.git",
-                "reference": "83b3c8e5a59d83da341f34f221e6a200568ed108"
+                "reference": "04da218251996855fb96f3ea51991185e5d21c63"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/83b3c8e5a59d83da341f34f221e6a200568ed108",
-                "reference": "83b3c8e5a59d83da341f34f221e6a200568ed108",
+                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/04da218251996855fb96f3ea51991185e5d21c63",
+                "reference": "04da218251996855fb96f3ea51991185e5d21c63",
                 "shasum": ""
             },
             "require": {
@@ -125,7 +126,7 @@
                     "role": "Developer"
                 }
             ],
-            "description": "Vatly API client for PHP",
+            "description": "PHP API client for Vatly, the Merchant of Record for European software and digital products",
             "homepage": "https://www.vatly.com",
             "keywords": [
                 "Apple Pay",
@@ -140,9 +141,10 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-api-php/issues",
-                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.28"
+                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.32"
             },
-            "time": "2026-09-02T08:23:00+00:00"
+            "time": "2026-11-07T12:48:29+00:00",
+            "published-time": "2026-11-07T12:48:42+00:00"
         },
         {
             "name": "vatly/vatly-fluent-php",
@@ -3131,5 +3133,5 @@
     "platform-overrides": {
         "php": "8.1"
     },
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.11.0"
 }

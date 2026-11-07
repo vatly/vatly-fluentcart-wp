@@ -4,28 +4,24 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Webhook\Reactions;
 
-use FluentCart\App\Models\Refund;
-use Throwable;
+use FluentCart\App\Helpers\Status;
+use FluentCart\App\Models\OrderTransaction;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\RefundCompleted;
-use Vatly\FluentCart\Plugin;
 
 /**
  * MoR polish (refund side): stamp the Vatly credit note URL onto the
  * FluentCart refund row's metadata so the customer dashboard can link to the
  * legally-valid Vatly credit note instead of FluentCart's own draft.
  *
- * Symmetric to {@see StampVatlyInvoiceOnPaid} for orders. The credit note
- * isn't surfaced as a first-class link on the Refund resource — Vatly
- * models refunds as credit orders, so the "credit note" is just the
- * customerInvoice of the related credit order. Path:
- *
- *   RefundCompleted event
- *     → GetRefund($refundId) → Refund.orderId  (the credit order)
- *       → GetOrder($creditOrderId) → OrderLinks.customerInvoice  (the credit note)
- *
- * Two API roundtrips per webhook delivery — acceptable since refunds are
- * infrequent compared to order.paid.
+ * Symmetric to {@see StampVatlyInvoiceOnPaid} for orders. Vatly models a
+ * refund as a credit order, so the "credit note" is that credit order's
+ * customerInvoice. vatly-api-php surfaces it directly on the typed
+ * {@see RefundCompleted} event as `customerInvoiceUrl` (hydrated from the fat,
+ * signed `refund.completed` payload, byte-identical to `GET /v1/refunds/{id}`),
+ * so this reaction reads the link off the event with no follow-up API call.
+ * Earlier it had to chain GetRefund (for the credit order id) then GetOrder
+ * (for the link); both round-trips are now gone.
  *
  * Runs as an `additionalWebhookReactions` entry so it fires alongside the
  * built-in {@see \Vatly\Fluent\Webhooks\Reactions\SyncRefundOnStatusChange}
@@ -34,8 +30,6 @@ use Vatly\FluentCart\Plugin;
  */
 final class StampVatlyCreditNoteOnRefundCompleted implements WebhookReactionInterface
 {
-    public function __construct(private Plugin $plugin) {}
-
     public function supports(object $event): bool
     {
         return $event instanceof RefundCompleted;
@@ -47,33 +41,12 @@ final class StampVatlyCreditNoteOnRefundCompleted implements WebhookReactionInte
             return;
         }
 
-        try {
-            $apiRefund = $this->plugin->vatly()->getRefund()->execute($event->refundId);
-        } catch (Throwable $e) {
-            error_log('[vatly-for-fluentcart] credit-note stamp: GetRefund failed: ' . $e->getMessage());
-            return;
-        }
+        $creditNoteUrl = $event->customerInvoiceUrl;
 
-        $creditOrderId = $apiRefund->orderId ?? null;
-        if ($creditOrderId === null || $creditOrderId === '') {
-            // Refund hasn't materialized a credit order yet — surface nothing
-            // rather than guessing. Subsequent webhooks (e.g. re-delivery
-            // after the credit order is issued) will retry.
-            return;
-        }
-
-        try {
-            $creditOrder = $this->plugin->vatly()->getOrder()->execute($creditOrderId);
-        } catch (Throwable $e) {
-            error_log('[vatly-for-fluentcart] credit-note stamp: GetOrder for credit order failed: ' . $e->getMessage());
-            return;
-        }
-
-        $creditNoteUrl = $creditOrder->links->customerInvoice->href ?? null;
-
-        $refundRow = Refund::query()
+        $refundRow = OrderTransaction::query()
             ->where('vendor_charge_id', $event->refundId)
             ->where('payment_method', 'vatly')
+            ->where('transaction_type', Status::TRANSACTION_TYPE_REFUND)
             ->first();
 
         if ($refundRow === null) {
@@ -83,9 +56,15 @@ final class StampVatlyCreditNoteOnRefundCompleted implements WebhookReactionInte
             return;
         }
 
+        // FluentCart 2.2.0's OrderTransaction has no updateMeta() helper (unlike
+        // Order/Subscription); it carries a JSON `meta` column instead, so we
+        // merge into that and save.
+        $meta = is_array($refundRow->meta) ? $refundRow->meta : [];
         if ($creditNoteUrl !== null) {
-            $refundRow->updateMeta('_vatly_credit_note_url', $creditNoteUrl);
+            $meta['_vatly_credit_note_url'] = $creditNoteUrl;
         }
-        $refundRow->updateMeta('_vatly_mor_disclosure', __('This refund was processed by Vatly as Merchant of Record. The legally valid credit note is provided by Vatly.', 'vatly-for-fluentcart'));
+        $meta['_vatly_mor_disclosure'] = __('This refund was processed by Vatly as Merchant of Record. The legally valid credit note is provided by Vatly.', 'vatly-for-fluentcart');
+        $refundRow->meta = $meta;
+        $refundRow->save();
     }
 }

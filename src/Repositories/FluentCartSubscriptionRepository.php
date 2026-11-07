@@ -58,7 +58,8 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
 
     public function store(StoreSubscriptionData $data): SubscriptionInterface
     {
-        $fluentCartSubId = $this->fetchFluentCartSubscriptionId($data->vatlyId);
+        $vatlySubscription = $this->fetchVatlySubscription($data->vatlyId);
+        $fluentCartSubId   = $this->subscriptionIdFromMetadata($vatlySubscription);
 
         if ($fluentCartSubId === null) {
             error_log(sprintf(
@@ -78,13 +79,13 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
             return $this->orphanWrapper($data);
         }
 
-        $this->saveSuppressingOutbound($subscription, [
+        $this->saveSuppressingOutbound($subscription, array_merge([
             'vendor_subscription_id' => $data->vatlyId,
             'vendor_customer_id'     => $data->customerId,
             'vendor_plan_id'         => $data->planId,
             'status'                 => 'active',
             'quantity'               => $data->quantity,
-        ]);
+        ], $this->billingScheduleFrom($vatlySubscription)));
 
         return new FluentCartSubscription($subscription);
     }
@@ -138,6 +139,32 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
     }
 
     /**
+     * One-time backfill entry point (see
+     * {@see \Vatly\FluentCart\Support\SubscriptionBillingBackfill}): re-fetch
+     * the Vatly subscription for an already-linked FluentCart row and fill in
+     * billing-schedule columns an older build of store() left null. Reuses the
+     * same fetch + mapping + loop-guarded save as store(), so the date mapping
+     * lives in one place. Returns true when the row was updated, false when
+     * there's no Vatly id to resolve or Vatly reports no dates yet.
+     */
+    public function backfillBillingSchedule(Subscription $row): bool
+    {
+        $vatlyId = (string) ($row->vendor_subscription_id ?? '');
+        if ($vatlyId === '') {
+            return false;
+        }
+
+        $schedule = $this->billingScheduleFrom($this->fetchVatlySubscription($vatlyId));
+        if ($schedule === []) {
+            return false;
+        }
+
+        $this->saveSuppressingOutbound($row, $schedule);
+
+        return true;
+    }
+
+    /**
      * @param array<string, mixed> $dirty
      */
     private function saveSuppressingOutbound(Subscription $row, array $dirty): void
@@ -150,20 +177,87 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
         }
     }
 
-    private function fetchFluentCartSubscriptionId(string $vatlySubscriptionId): ?int
+    /**
+     * Fetch the Vatly subscription resource. store() needs it both to read the
+     * `fluentcart_subscription_id` we stamped in metadata and to back-fill the
+     * billing schedule onto the FluentCart row.
+     */
+    private function fetchVatlySubscription(string $vatlySubscriptionId): ?object
     {
         try {
-            $sub = $this->plugin->vatly()->getSubscription()->execute($vatlySubscriptionId);
+            return $this->plugin->vatly()->getSubscription()->execute($vatlySubscriptionId);
         } catch (Throwable $e) {
-            error_log('[vatly-for-fluentcart] failed to fetch Vatly subscription metadata: ' . $e->getMessage());
+            error_log('[vatly-for-fluentcart] failed to fetch Vatly subscription: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function subscriptionIdFromMetadata(?object $vatlySubscription): ?int
+    {
+        if ($vatlySubscription === null) {
             return null;
         }
 
-        $metadata = is_array($sub->metadata ?? null) ? $sub->metadata : (array) ($sub->metadata ?? []);
+        $metadata = is_array($vatlySubscription->metadata ?? null)
+            ? $vatlySubscription->metadata
+            : (array) ($vatlySubscription->metadata ?? []);
 
         return isset($metadata['fluentcart_subscription_id'])
             ? (int) $metadata['fluentcart_subscription_id']
             : null;
+    }
+
+    /**
+     * Back-fill FluentCart's billing-schedule columns from Vatly (the
+     * authoritative source). FluentCart creates the subscription row at checkout
+     * without a next billing date for a hosted-redirect gateway, so without this
+     * the admin renders the next renewal as "Invalid Date". `next_billing_date`
+     * is the next charge — during a trial that is the trial end, which Vatly's
+     * `nextRenewalAt` already reflects, so we fall back to `trialUntil` when
+     * `nextRenewalAt` is absent. `trial_ends_at` mirrors `trialUntil`. Columns
+     * Vatly doesn't provide are left untouched.
+     *
+     * @return array<string, string>
+     */
+    private function billingScheduleFrom(?object $vatlySubscription): array
+    {
+        if ($vatlySubscription === null) {
+            return [];
+        }
+
+        $trialUntil  = $this->toDateTime($vatlySubscription->trialUntil ?? null);
+        $nextRenewal = $this->toDateTime($vatlySubscription->nextRenewalAt ?? null) ?? $trialUntil;
+
+        $schedule = [];
+        if ($nextRenewal !== null) {
+            $schedule['next_billing_date'] = $nextRenewal;
+        }
+        if ($trialUntil !== null) {
+            $schedule['trial_ends_at'] = $trialUntil;
+        }
+
+        return $schedule;
+    }
+
+    /**
+     * Normalise a Vatly ISO-8601 timestamp to FluentCart's `Y-m-d H:i:s`
+     * datetime column format (mirrors the cancel path's handling of expire_at).
+     * Returns null for empty/unparseable input so the caller leaves the column
+     * untouched.
+     *
+     * @param mixed $value
+     */
+    private function toDateTime($value): ?string
+    {
+        if (empty($value)) {
+            return null;
+        }
+
+        try {
+            return (new DateTimeImmutable((string) $value))->format('Y-m-d H:i:s');
+        } catch (Throwable $e) {
+            return null;
+        }
     }
 
     private function orphanWrapper(StoreSubscriptionData $data): SubscriptionInterface
