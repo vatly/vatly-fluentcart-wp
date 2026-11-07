@@ -6,6 +6,7 @@ namespace Vatly\FluentCart\Repositories;
 
 use FluentCart\App\Helpers\Status;
 use FluentCart\App\Models\OrderTransaction;
+use FluentCart\App\Services\Payments\Refund;
 use Vatly\API\Types\RefundStatus as VatlyRefundStatus;
 use Vatly\Fluent\Contracts\RefundInterface;
 use Vatly\Fluent\Contracts\RefundRepositoryInterface;
@@ -20,10 +21,11 @@ use Vatly\FluentCart\Models\FluentCartRefund;
  * initiation (status `pending`); the built-in
  * {@see \Vatly\Fluent\Webhooks\Reactions\SyncRefundOnStatusChange} reaction
  * then walks it through to its terminal state (`refunded` / `failed`) when
- * `refund.*` webhooks arrive. `store()` is only the fallback path for refunds
- * Vatly emits webhooks for that we don't have a local row for (e.g. refunds
- * issued from the Vatly dashboard out-of-band, or webhook re-delivery before
- * the initiation persist landed).
+ * `refund.*` webhooks arrive. `store()` is the path for refunds we have no
+ * local row for (refunds issued from the Vatly dashboard out-of-band): it
+ * resolves the FluentCart charge from the Vatly order id and records the refund
+ * against it, so a dashboard-initiated refund shows up in FluentCart's own
+ * refund UI and accounting.
  *
  * Status mapping mirrors {@see \Vatly\FluentCart\PaymentMethod\RefundService::toFluentCartStatus()}
  * — kept inline rather than extracted because the input shape differs slightly
@@ -77,19 +79,75 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
 
     public function store(StoreRefundData $data): ?RefundInterface
     {
-        // Out-of-band refund initiation (e.g. merchant clicks refund in the
-        // Vatly dashboard rather than FluentCart admin). We don't auto-create
-        // a FluentCart-side row because that needs a parent_transaction_id we
-        // can't resolve from StoreRefundData (only the Vatly order id is
-        // carried), and silently inserting a parent-less refund row would
-        // misalign FluentCart's own refund UI. Log + skip; merchants will see
-        // the refund in their Vatly dashboard either way.
-        error_log(sprintf(
-            '[vatly-for-fluentcart] refund.* %s arrived without a local FluentCart row — likely issued out-of-band via the Vatly dashboard. Skipping local create; recommend reconciling manually.',
-            $data->vatlyId,
-        ));
+        // Out-of-band refund (issued from the Vatly dashboard, so FluentCart has
+        // no local row). Only a completed refund moved money and is worth
+        // recording: a failed/canceled refund that we never tracked has nothing
+        // to reconcile on the FluentCart side.
+        $status = self::toFluentCartStatus($data->status);
+        if ($status !== Status::TRANSACTION_REFUNDED) {
+            error_log(sprintf(
+                '[vatly-for-fluentcart] refund.* %s arrived out-of-band in non-completed state "%s"; nothing to record locally. Skipping.',
+                $data->vatlyId,
+                $data->status,
+            ));
 
-        return null;
+            return null;
+        }
+
+        // Resolve the FluentCart charge this refund belongs to. We stamp the
+        // Vatly order id onto the charge transaction's vendor_charge_id at
+        // payment time, and the refund webhook carries that same id as
+        // originalOrderId, so it's the same lookup the order repository uses.
+        $parent = OrderTransaction::query()
+            ->where('vendor_charge_id', $data->originalOrderId)
+            ->where('payment_method', 'vatly')
+            ->first();
+
+        if (! $parent instanceof OrderTransaction) {
+            error_log(sprintf(
+                '[vatly-for-fluentcart] refund %s references Vatly order %s with no matching FluentCart charge (likely an order from another system). Skipping local create.',
+                $data->vatlyId,
+                $data->originalOrderId,
+            ));
+
+            return null;
+        }
+
+        // Merchant-of-Record accounting: record the NET refund (subtotal),
+        // matching the net the charge side books, not Vatly's gross `total`
+        // (net + VAT). Fall back to the gross only if Vatly sent no subtotal.
+        $net = $data->subtotal ?? $data->total;
+        if ($net <= 0) {
+            error_log(sprintf(
+                '[vatly-for-fluentcart] refund %s has no positive net amount to record. Skipping.',
+                $data->vatlyId,
+            ));
+
+            return null;
+        }
+
+        // createOrRecordRefund records the refund against the parent charge
+        // (setting order_id, parent_id meta and the order's refunded total) and
+        // is idempotent on vendor_charge_id, so a redelivered webhook returns
+        // the existing row rather than creating a duplicate.
+        $recorded = Refund::createOrRecordRefund([
+            'vendor_charge_id' => $data->vatlyId,
+            'payment_method'   => 'vatly',
+            'status'           => $status,
+            'total'            => $net,
+        ], $parent);
+
+        if (is_wp_error($recorded)) {
+            error_log(sprintf(
+                '[vatly-for-fluentcart] failed to record out-of-band refund %s: %s',
+                $data->vatlyId,
+                $recorded->get_error_message(),
+            ));
+
+            return null;
+        }
+
+        return new FluentCartRefund($recorded);
     }
 
     public function update(RefundInterface $refund, UpdateRefundData $data): RefundInterface

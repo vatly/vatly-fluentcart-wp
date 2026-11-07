@@ -392,10 +392,25 @@ namespace FluentCart\App\Services\Payments {
          */
         public static ?array $lastRecorded = null;
 
-        /** @param array<string, mixed> $args */
-        public static function createOrRecordRefund(array $args, OrderTransaction $parent): void
+        /**
+         * Mirrors FluentCart's return contract (the created/existing refund
+         * OrderTransaction, or a WP_Error on an invalid amount) so the refund
+         * repository's store() success path is exercisable. Records the args for
+         * assertion and hands back a refund row carrying them.
+         *
+         * @param array<string, mixed> $args
+         */
+        public static function createOrRecordRefund(array $args, OrderTransaction $parent): OrderTransaction|\WP_Error
         {
             self::$lastRecorded = [$args, $parent];
+
+            $refund                   = new OrderTransaction();
+            $refund->transaction_type = 'refund';
+            $refund->vendor_charge_id = isset($args['vendor_charge_id']) ? (string) $args['vendor_charge_id'] : null;
+            $refund->status           = isset($args['status']) ? (string) $args['status'] : null;
+            $refund->total            = isset($args['total']) ? (int) $args['total'] : null;
+
+            return $refund;
         }
     }
 }
