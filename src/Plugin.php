@@ -219,12 +219,11 @@ final class Plugin
                 // FluentCart order so receipts can link to it. Runs after the
                 // built-in StoreOrderOnPaid that owns the FluentCart-side
                 // transaction confirmation.
-                new StampVatlyInvoiceOnPaid($this),
+                new StampVatlyInvoiceOnPaid(),
                 // MoR polish (refund side): stamp Vatly's credit note URL
-                // onto the FluentCart refund row. The credit note is the
-                // customerInvoice of the credit order Vatly created from
-                // the refund (Refund.orderId → GetOrder → customerInvoice).
-                new StampVatlyCreditNoteOnRefundCompleted($this),
+                // onto the FluentCart refund row. The link rides on the
+                // refund.completed event (customerInvoiceUrl), so no GetOrder.
+                new StampVatlyCreditNoteOnRefundCompleted(),
                 // Dunning: when Vatly fires order.payment_failed (renewal payment
                 // failure / dunning start), flip the FluentCart subscription
                 // to `past_due` so FluentCart's own dunning notifications fire.
