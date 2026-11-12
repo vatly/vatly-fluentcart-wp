@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Vatly for FluentCart
  * Plugin URI:        https://vatly.com/integrations/fluentcart
- * Description:       Accept payments through Vatly, the Merchant of Record for European software and digital products, inside FluentCart.
+ * Description:       Accept payments through Vatly, the European Merchant of Record for AI, software and digital products, inside FluentCart.
  * Version:           0.1.1-alpha
  * Requires at least: 6.2
  * Requires PHP:      8.1
