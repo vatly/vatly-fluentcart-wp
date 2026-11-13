@@ -83,18 +83,30 @@ namespace FluentCart\App {
          */
         public static array $recordedCalls = [];
 
+        /**
+         * phpunit-only test seam: every `where($column, $value)` call, in
+         * order, in a simpler [column, value] shape. Kept alongside
+         * $recordedCalls because the subscription-attribution tests assert on
+         * this log while the query-shape tests assert on $recordedCalls.
+         *
+         * @var array<int, array{0: string, 1: mixed}>
+         */
+        public static array $wheres = [];
+
         /** Reset the staged-result queues + recorded calls (call in test setUp/tearDown). */
         public static function reset(): void
         {
             self::$nextResults = [];
             self::$nextCollections = [];
             self::$recordedCalls = [];
+            self::$wheres = [];
         }
 
         /** @return static<TModel> */
         public function where(string $column, mixed $value = null, mixed $extra = null): self
         {
             self::$recordedCalls[] = ['method' => 'where', 'column' => $column, 'value' => $value];
+            self::$wheres[] = [$column, $value];
             return $this;
         }
 
@@ -454,12 +466,22 @@ namespace FluentCart\App\Modules\Subscriptions\Services {
     class SubscriptionService
     {
         /**
+         * phpunit-only: the last recorded renewal, as
+         * [$subscriptionModel, $transactionData, $subscriptionUpdateArgs].
+         *
+         * @var array{0: ?Subscription, 1: array<string, mixed>, 2: array<string, mixed>}|null
+         */
+        public static ?array $lastRecorded = null;
+
+        /**
          * @param array<string, mixed> $transactionData
          * @param array<string, mixed> $subscriptionUpdateArgs
          * @return mixed
          */
         public static function recordRenewalPayment(array $transactionData, ?Subscription $subscriptionModel = null, array $subscriptionUpdateArgs = [])
         {
+            self::$lastRecorded = [$subscriptionModel, $transactionData, $subscriptionUpdateArgs];
+
             return null;
         }
     }

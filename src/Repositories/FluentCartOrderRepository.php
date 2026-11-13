@@ -10,12 +10,14 @@ use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
 use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
+use Vatly\API\Resources\Order;
 use Vatly\Fluent\Contracts\OrderInterface;
 use Vatly\Fluent\Contracts\OrderRepositoryInterface;
 use Vatly\Fluent\Data\StoreOrderData;
 use Vatly\Fluent\Data\UpdateOrderData;
 use Vatly\FluentCart\Models\FluentCartOrder;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\Support\LinkedSubscription;
 
 /**
  * Bridges fluent's OrderRepository contract to FluentCart's data layer.
@@ -27,7 +29,8 @@ use Vatly\FluentCart\Plugin;
  *   - Vatly order metadata carries `fluentcart_transaction_id`
  *     → initial payment; confirm the matching FluentCart transaction.
  *   - Otherwise (host id resolved via bindings, no transaction metadata)
- *     → subscription renewal; record on the matching FluentCart subscription.
+ *     → subscription renewal; record on the FluentCart subscription the
+ *     order's lines link to, else the customer's newest active one.
  *
  * `findByVatlyId()` makes the reaction idempotent across re-deliveries —
  * after the first store we set the FluentCart transaction's vendor_charge_id
@@ -51,20 +54,23 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
     {
         // Prefer the Vatly order metadata that vatly-fluent-php already decoded
         // from the signed order.paid webhook payload and handed us on
-        // StoreOrderData: that keeps the common path a single, in-process
-        // operation with no extra API round-trip. Only when the webhook carries
-        // no usable metadata do we fall back to a GetOrder lookup. (The previous
-        // code always did the GetOrder, which besides being redundant could race
-        // a dev server's own state and intermittently return a metadata-less
-        // order, silently skipping confirmation.)
-        $metadata = is_array($data->metadata) ? $data->metadata : [];
+        // StoreOrderData: when it already names the FluentCart transaction, the
+        // initial-payment path is a single in-process confirm with no GetOrder
+        // round-trip. (The previous code always did the GetOrder, which besides
+        // being redundant could race a dev server's own state and intermittently
+        // return a metadata-less order, silently skipping confirmation.)
+        $webhookMetadata = is_array($data->metadata) ? $data->metadata : [];
 
-        if (! isset($metadata['fluentcart_transaction_id'])) {
-            $fetched = $this->fetchOrderMetadata($data->vatlyId);
-            if (isset($fetched['fluentcart_transaction_id'])) {
-                $metadata = $fetched;
-            }
+        if (isset($webhookMetadata['fluentcart_transaction_id'])) {
+            return $this->confirmInitialPayment($data, (string) $webhookMetadata['fluentcart_transaction_id']);
         }
+
+        // No usable transaction id on the webhook. Fetch the full Vatly order:
+        // the renewal / claim-back paths below attribute by the order's
+        // line-level subscription link, which needs the order resource, not
+        // just its metadata.
+        $vatlyOrder = $this->fetchVatlyOrder($data->vatlyId);
+        $metadata   = $this->metadataOf($vatlyOrder);
 
         if (isset($metadata['fluentcart_transaction_id'])) {
             return $this->confirmInitialPayment($data, (string) $metadata['fluentcart_transaction_id']);
@@ -98,12 +104,12 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
                     subtotal:       $data->subtotal,
                     taxSummary:     $data->taxSummary,
                     hostCustomerId: $hostCustomerId,
-                ));
+                ), $vatlyOrder);
             }
         }
 
         if ($data->hostCustomerId !== null) {
-            return $this->recordRenewal($data);
+            return $this->recordRenewal($data, $vatlyOrder);
         }
 
         // Fall-through: a paid Vatly order we can't route — log and return a
@@ -212,16 +218,31 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         return new FluentCartOrder($transaction);
     }
 
-    private function recordRenewal(StoreOrderData $data): OrderInterface
+    private function recordRenewal(StoreOrderData $data, ?Order $vatlyOrder): OrderInterface
     {
         // `failing` and `past_due` are FluentCart's dunning states; a renewal
         // payment landing while in either is exactly the recovery case — exclude
         // them and dunning recovery silently breaks (the renewal goes
         // unrecorded, the subscription stays stuck in `failing`).
-        $subscription = Subscription::query()
+        $renewableStatuses = ['active', 'trialing', 'failing', 'past_due'];
+
+        // The order's lines name the subscription exactly. When they do, never
+        // fall back to a different subscription of the same customer.
+        $linked = $vatlyOrder !== null ? LinkedSubscription::forOrder($vatlyOrder) : null;
+        if ($linked !== null && ! in_array((string) $linked->status, $renewableStatuses, true)) {
+            error_log(sprintf(
+                '[vatly-for-fluentcart] renewal order.paid %s: linked subscription %d is %s, not renewable — skipping',
+                $data->vatlyId,
+                $linked->id,
+                (string) $linked->status,
+            ));
+            return $this->orphanWrapper($data);
+        }
+
+        $subscription = $linked ?? Subscription::query()
             ->where('customer_id', $data->hostCustomerId)
             ->where('current_payment_method', 'vatly')
-            ->whereIn('status', ['active', 'trialing', 'failing', 'past_due'])
+            ->whereIn('status', $renewableStatuses)
             ->orderByDesc('id')
             ->first();
 
@@ -275,23 +296,29 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             : $this->orphanWrapper($data);
     }
 
+    private function fetchVatlyOrder(string $vatlyOrderId): ?Order
+    {
+        try {
+            return $this->plugin->vatly()->getOrder()->execute($vatlyOrderId);
+        } catch (Throwable $e) {
+            error_log('[vatly-for-fluentcart] failed to fetch Vatly order: ' . $e->getMessage());
+            return null;
+        }
+    }
+
     /**
-     * Fallback metadata lookup: fetch the Vatly order and return its metadata.
-     * Only used when the order.paid webhook payload itself carried no usable
-     * metadata (the common path reads StoreOrderData::$metadata directly).
+     * Normalise the metadata bag off an already-fetched Vatly order (fetched
+     * once via {@see self::fetchVatlyOrder()}). Only reached when the order.paid
+     * webhook payload itself carried no usable transaction id (the common path
+     * reads StoreOrderData::$metadata directly and never calls this).
      *
      * @return array<string, mixed>
      */
-    private function fetchOrderMetadata(string $vatlyOrderId): array
+    private function metadataOf(?Order $order): array
     {
-        try {
-            $order = $this->plugin->vatly()->getOrder()->execute($vatlyOrderId);
-        } catch (Throwable $e) {
-            error_log('[vatly-for-fluentcart] fallback GetOrder metadata lookup failed: ' . $e->getMessage());
-            return [];
-        }
-
-        return is_array($order->metadata ?? null) ? $order->metadata : [];
+        return is_array($order->metadata ?? null)
+            ? $order->metadata
+            : (array) ($order->metadata ?? []);
     }
 
     /**

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "b457549367c72f97e8589115e1d45fef",
+    "content-hash": "3b3366fd066df5e9efdeacd6be0b514c",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -81,16 +81,16 @@
         },
         {
             "name": "vatly/vatly-api-php",
-            "version": "v0.1.0-alpha.32",
+            "version": "v0.1.0-alpha.33",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-api-php.git",
-                "reference": "04da218251996855fb96f3ea51991185e5d21c63"
+                "reference": "235fd1bf747192c8b1d078d35d6bc7b7a615d63a"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/04da218251996855fb96f3ea51991185e5d21c63",
-                "reference": "04da218251996855fb96f3ea51991185e5d21c63",
+                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/235fd1bf747192c8b1d078d35d6bc7b7a615d63a",
+                "reference": "235fd1bf747192c8b1d078d35d6bc7b7a615d63a",
                 "shasum": ""
             },
             "require": {
@@ -126,43 +126,46 @@
                     "role": "Developer"
                 }
             ],
-            "description": "PHP API client for Vatly, the Merchant of Record for European software and digital products",
+            "description": "PHP API client for Vatly, the European Merchant of Record for AI, software and digital products",
             "homepage": "https://www.vatly.com",
             "keywords": [
                 "Apple Pay",
+                "ai",
                 "billing",
                 "creditcard",
                 "ideal",
+                "merchant-of-record",
                 "payments",
                 "paypal",
                 "php",
+                "vat",
                 "vatly",
                 "vatly-api-php"
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-api-php/issues",
-                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.32"
+                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.33"
             },
-            "time": "2026-11-07T12:48:29+00:00",
-            "published-time": "2026-11-07T12:48:42+00:00"
+            "time": "2026-11-13T16:59:04+00:00",
+            "published-time": "2026-11-13T17:00:15+00:00"
         },
         {
             "name": "vatly/vatly-fluent-php",
-            "version": "v0.8.0-alpha.26",
+            "version": "v0.8.0-alpha.30",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-fluent-php.git",
-                "reference": "5a838b72e400e138c9702aa3c09af0f1df74dc11"
+                "reference": "5af934702c85fec9d18b50856a3b542a769b15f7"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/5a838b72e400e138c9702aa3c09af0f1df74dc11",
-                "reference": "5a838b72e400e138c9702aa3c09af0f1df74dc11",
+                "url": "https://api.github.com/repos/vatly/vatly-fluent-php/zipball/5af934702c85fec9d18b50856a3b542a769b15f7",
+                "reference": "5af934702c85fec9d18b50856a3b542a769b15f7",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.1",
-                "vatly/vatly-api-php": "^0.1.0-alpha.28"
+                "vatly/vatly-api-php": "^0.1.0-alpha.33"
             },
             "require-dev": {
                 "mockery/mockery": "^1.6",
@@ -185,18 +188,22 @@
                     "email": "sander@vanhooft.com"
                 }
             ],
-            "description": "Framework-agnostic fluent PHP SDK for Vatly billing",
+            "description": "Framework-agnostic fluent PHP SDK for Vatly, the European Merchant of Record for AI, software and digital products",
             "keywords": [
+                "ai",
                 "billing",
+                "merchant-of-record",
                 "payments",
                 "subscriptions",
+                "vat",
                 "vatly"
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-fluent-php/issues",
-                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.26"
+                "source": "https://github.com/vatly/vatly-fluent-php/tree/v0.8.0-alpha.30"
             },
-            "time": "2026-09-02T08:26:36+00:00"
+            "time": "2026-11-13T17:09:18+00:00",
+            "published-time": "2026-11-13T17:10:09+00:00"
         }
     ],
     "packages-dev": [
