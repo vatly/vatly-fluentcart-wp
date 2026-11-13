@@ -124,7 +124,7 @@ final class HandleChargebackReversed implements WebhookReactionInterface
         // restored it manually.
         return Subscription::query()
             ->where('customer_id', (int) $hostCustomerId)
-            ->where('payment_method', 'vatly')
+            ->where('current_payment_method', 'vatly')
             ->whereIn('status', ['paused', 'active'])
             ->orderByDesc('id')
             ->first();

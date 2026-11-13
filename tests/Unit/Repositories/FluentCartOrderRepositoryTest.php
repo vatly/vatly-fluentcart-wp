@@ -8,7 +8,7 @@ use Brain\Monkey\Functions;
 use FluentCart\App\Builder;
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
-use FluentCart\App\Services\Subscription\SubscriptionRenewal;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Mockery;
 use Vatly\Fluent\Contracts\OrderInterface;
 use Vatly\Fluent\Data\StoreOrderData;
@@ -34,7 +34,7 @@ class FluentCartOrderRepositoryTest extends TestCase
     {
         parent::setUp();
         Builder::reset();
-        SubscriptionRenewal::$lastRecorded = null;
+        SubscriptionService::$lastRecorded = null;
     }
 
     protected function tearDown(): void
@@ -53,7 +53,7 @@ class FluentCartOrderRepositoryTest extends TestCase
 
         $this->storeRenewal(['subscriptionId' => 'subscription_B']);
 
-        self::assertSame($linked, SubscriptionRenewal::$lastRecorded[0] ?? null);
+        self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
         self::assertContains(['vendor_subscription_id', 'subscription_B'], Builder::$wheres);
         self::assertNotContains(['customer_id', '42'], Builder::$wheres);
     }
@@ -66,7 +66,7 @@ class FluentCartOrderRepositoryTest extends TestCase
 
         $this->storeRenewal(null);
 
-        self::assertSame($newest, SubscriptionRenewal::$lastRecorded[0] ?? null);
+        self::assertSame($newest, SubscriptionService::$lastRecorded[0] ?? null);
         self::assertContains(['customer_id', '42'], Builder::$wheres);
         self::assertSame('active', $newest->status, 'a renewal recovers a subscription in dunning');
     }
@@ -78,7 +78,7 @@ class FluentCartOrderRepositoryTest extends TestCase
 
         $result = $this->storeRenewal(['subscriptionId' => 'subscription_B']);
 
-        self::assertNull(SubscriptionRenewal::$lastRecorded);
+        self::assertNull(SubscriptionService::$lastRecorded);
         self::assertSame('order_renewal_1', $result->getVatlyId());
     }
 
@@ -113,7 +113,7 @@ class FluentCartOrderRepositoryTest extends TestCase
         $subscription = new Subscription();
         $subscription->id = $id;
         $subscription->status = $status;
-        $subscription->payment_method = 'vatly';
+        $subscription->current_payment_method = 'vatly';
 
         return $subscription;
     }
@@ -240,5 +240,82 @@ class FluentCartOrderRepositoryTest extends TestCase
         );
 
         $this->assertHookExpectations();
+    }
+
+    /**
+     * Regression for the wrong-transaction confirmation bug: `confirmInitialPayment`
+     * used to resolve the transaction with `where('uuid', $id)->orWhere('id', $id)`.
+     * Because `fluentcart_transaction_id` is a 32-char hex uuid and `id` is an
+     * integer column, MySQL coerced e.g. `"1b9c29a0..."` to its leading integer (1)
+     * and confirmed transaction #1 instead of the real one — presenting as
+     * intermittent "Payment Pending". The fix matches on `uuid` and only adds
+     * `orWhere('id', ...)` when the value is numeric. Assert a hex uuid never
+     * touches the `id` column.
+     */
+    public function test_confirm_initial_payment_matches_uuid_without_coercing_a_hex_id(): void
+    {
+        Builder::reset();
+
+        $uuid = '1b9c29a0e4f14d2e9a7c3b8f5d6e7a90'; // hex, leading digit — the coercion trap
+        $tx = new OrderTransaction();
+        $tx->id = 1;
+        $tx->uuid = $uuid;
+        Builder::$nextResults = [$tx];
+
+        (new FluentCartOrderRepository($this->plugin()))->store(
+            $this->storeData(['fluentcart_transaction_id' => $uuid]),
+        );
+
+        $idColumnCalls = array_values(array_filter(
+            Builder::$recordedCalls,
+            static fn (array $c): bool => $c['column'] === 'id',
+        ));
+        self::assertSame([], $idColumnCalls, 'a hex uuid must never be matched against the integer id column');
+
+        $uuidCalls = array_values(array_filter(
+            Builder::$recordedCalls,
+            static fn (array $c): bool => $c['method'] === 'where' && $c['column'] === 'uuid' && $c['value'] === $uuid,
+        ));
+        self::assertCount(1, $uuidCalls, 'the transaction must be resolved by its uuid');
+    }
+
+    /**
+     * The flip side: a purely numeric `fluentcart_transaction_id` (a transaction
+     * with no uuid, stamped with its integer id at checkout) must still be
+     * matched on the `id` column via the guarded `orWhere`.
+     */
+    public function test_confirm_initial_payment_also_matches_a_numeric_id(): void
+    {
+        Builder::reset();
+
+        $tx = new OrderTransaction();
+        $tx->id = 7;
+        Builder::$nextResults = [$tx];
+
+        (new FluentCartOrderRepository($this->plugin()))->store(
+            $this->storeData(['fluentcart_transaction_id' => '7']),
+        );
+
+        $idOrWhere = array_values(array_filter(
+            Builder::$recordedCalls,
+            static fn (array $c): bool => $c['method'] === 'orWhere' && $c['column'] === 'id' && $c['value'] === 7,
+        ));
+        self::assertCount(1, $idOrWhere, 'a numeric transaction id must still be matched on the id column (as an int)');
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function storeData(array $metadata): StoreOrderData
+    {
+        return new StoreOrderData(
+            vatlyId: 'order_vatly_1',
+            customerId: 'cus_1',
+            status: 'paid',
+            total: 1900,
+            currency: 'EUR',
+            testmode: true,
+            metadata: $metadata,
+        );
     }
 }

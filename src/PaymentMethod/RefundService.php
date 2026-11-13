@@ -37,11 +37,11 @@ use WP_Error;
  * reaction that vatly-fluent-php doesn't yet ship — once upstream surfaces
  * typed Refund events, add a reaction that updates the FluentCart refund row.
  *
- * ── Return contract (verified against FluentCart free 1.3.28) ───────────────
+ * ── Return contract (verified against FluentCart free 2.2.0) ────────────────
  * FluentCart's `Refund::processRefund` creates the refund OrderTransaction
  * itself, calls `$gateway->processRefund(...)`, and assigns the *scalar* return
  * value straight to that transaction's `vendor_charge_id`
- * (app/Services/Payments/Refund.php:85-92). So a gateway's refund entrypoint
+ * (app/Services/Payments/Refund.php:99-106). So a gateway's refund entrypoint
  * must return the vendor refund id (string) on success, or a WP_Error on
  * failure — NOT an array. (The integration-guide prose mentions an
  * `['success'=>true,'refund_id'=>…]` array, but the canonical Paystack gateway

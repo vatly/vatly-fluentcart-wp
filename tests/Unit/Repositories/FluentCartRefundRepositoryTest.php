@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Tests\Unit\Repositories;
 
-use FluentCart\App\Models\Refund;
+use Brain\Monkey\Functions;
+use FluentCart\App\Builder;
+use FluentCart\App\Models\OrderTransaction;
+use FluentCart\App\Services\Payments\Refund;
 use Mockery;
 use Vatly\Fluent\Contracts\RefundInterface;
 use Vatly\Fluent\Data\StoreRefundData;
@@ -18,21 +21,123 @@ use Vatly\FluentCart\Tests\TestCase;
  */
 class FluentCartRefundRepositoryTest extends TestCase
 {
-    public function test_store_skips_and_returns_null_for_out_of_band_refunds(): void
+    protected function setUp(): void
     {
-        // store() never persists — it's the fallback path for refunds we
-        // didn't initiate locally (issued from the Vatly dashboard).
+        parent::setUp();
+        Builder::reset();
+        Refund::$lastRecorded = null;
+        Functions\when('error_log')->justReturn(true);
+        Functions\when('is_wp_error')->alias(static fn ($thing): bool => $thing instanceof \WP_Error);
+    }
+
+    protected function tearDown(): void
+    {
+        Builder::reset();
+        Refund::$lastRecorded = null;
+        parent::tearDown();
+    }
+
+    public function test_store_records_a_completed_out_of_band_refund_as_net_against_the_charge(): void
+    {
+        // Out-of-band refund (issued from the Vatly dashboard). store() resolves
+        // the charge it belongs to by the Vatly order id we stamped on
+        // vendor_charge_id at payment time, then records it.
+        $charge     = new OrderTransaction();
+        $charge->id = 7;
+        Builder::$nextResults = [$charge];
+
         $result = (new FluentCartRefundRepository())->store(new StoreRefundData(
             vatlyId: 'rfd_1',
-            originalOrderId: 'ord_1',
+            customerId: 'cus_1',
+            status: 'refunded',
+            total: 2300,            // gross (net + VAT)
+            currency: 'EUR',
+            originalOrderId: 'order_9',
+            testmode: true,
+            subtotal: 1900,         // net
+        ));
+
+        self::assertInstanceOf(FluentCartRefund::class, $result);
+
+        // Charge resolved by the Vatly order id + the vatly method.
+        self::assertContains(
+            ['method' => 'where', 'column' => 'vendor_charge_id', 'value' => 'order_9'],
+            Builder::$recordedCalls,
+        );
+        self::assertContains(
+            ['method' => 'where', 'column' => 'payment_method', 'value' => 'vatly'],
+            Builder::$recordedCalls,
+        );
+
+        // Recorded the NET amount against the resolved charge, not Vatly's gross.
+        [$args, $parent] = Refund::$lastRecorded;
+        self::assertSame('rfd_1', $args['vendor_charge_id']);
+        self::assertSame('refunded', $args['status']);
+        self::assertSame(1900, $args['total']);
+        self::assertSame('vatly', $args['payment_method']);
+        self::assertSame($charge, $parent);
+    }
+
+    public function test_store_skips_when_no_matching_charge_transaction(): void
+    {
+        // Nothing staged, so the charge lookup returns null: the Vatly order
+        // belongs to another system. Skip rather than insert a parent-less row.
+        $result = (new FluentCartRefundRepository())->store(new StoreRefundData(
+            vatlyId: 'rfd_2',
+            customerId: 'cus_1',
+            status: 'refunded',
+            total: 2300,
+            currency: 'EUR',
+            originalOrderId: 'order_unknown',
+            testmode: true,
+            subtotal: 1900,
+        ));
+
+        self::assertNull($result);
+        self::assertNull(Refund::$lastRecorded, 'No refund row is recorded without a parent charge.');
+    }
+
+    public function test_store_skips_a_non_completed_out_of_band_refund(): void
+    {
+        // A failed/canceled refund we never tracked moved no money, so there is
+        // nothing to reconcile: skip before even resolving a charge.
+        foreach (['failed', 'canceled'] as $terminal) {
+            Refund::$lastRecorded = null;
+
+            $result = (new FluentCartRefundRepository())->store(new StoreRefundData(
+                vatlyId: 'rfd_x',
+                customerId: 'cus_1',
+                status: $terminal,
+                total: 2300,
+                currency: 'EUR',
+                originalOrderId: 'order_9',
+                testmode: true,
+                subtotal: 1900,
+            ));
+
+            self::assertNull($result);
+            self::assertNull(Refund::$lastRecorded, "A {$terminal} refund records nothing.");
+        }
+    }
+
+    public function test_store_falls_back_to_gross_when_vatly_sends_no_subtotal(): void
+    {
+        $charge = new OrderTransaction();
+        Builder::$nextResults = [$charge];
+
+        (new FluentCartRefundRepository())->store(new StoreRefundData(
+            vatlyId: 'rfd_3',
             customerId: 'cus_1',
             status: 'refunded',
             total: 500,
             currency: 'EUR',
+            originalOrderId: 'order_1',
             testmode: true,
+            // no subtotal: fall back to the gross total.
         ));
 
-        self::assertNull($result);
+        [$args] = Refund::$lastRecorded;
+        self::assertSame(500, $args['total']);
     }
 
     public function test_list_for_customer_returns_empty_array(): void
@@ -109,12 +214,35 @@ class FluentCartRefundRepositoryTest extends TestCase
         $this->assertHookExpectations();
     }
 
-    public function test_update_writes_total_and_currency_when_provided(): void
+    public function test_update_ignores_vatly_gross_total_and_currency(): void
     {
-        $row = $this->makeRowMock(expectFill: ['total' => 750, 'currency' => 'EUR']);
+        // MoR accounting: the Vatly refund resource carries the gross (tax-inclusive)
+        // amount Vatly returned to the customer, but FluentCart's refund row must
+        // keep the NET amount RefundService stamped at initiation. A status-only
+        // webhook (total/currency present, no status) must therefore not touch the
+        // row at all.
+        $row = Mockery::mock(OrderTransaction::class);
+        $row->shouldNotReceive('fill');
+        $row->shouldNotReceive('save');
+
         (new FluentCartRefundRepository())->update(
             new FluentCartRefund($row),
-            new UpdateRefundData(total: 750, currency: 'EUR'),
+            new UpdateRefundData(total: 2300, currency: 'EUR'),
+        );
+
+        $this->assertHookExpectations();
+    }
+
+    public function test_update_syncs_status_only_even_when_gross_total_is_present(): void
+    {
+        // The common refund.completed case: Vatly sends the terminal status plus
+        // its gross total. Only the status transition is applied; the gross total
+        // is dropped so the row keeps FluentCart's net refund figure.
+        $row = $this->makeRowMock(expectFill: ['status' => 'refunded']);
+
+        (new FluentCartRefundRepository())->update(
+            new FluentCartRefund($row),
+            new UpdateRefundData(status: 'refunded', total: 2300, currency: 'EUR'),
         );
 
         $this->assertHookExpectations();
@@ -122,7 +250,7 @@ class FluentCartRefundRepositoryTest extends TestCase
 
     public function test_update_with_no_changes_does_not_touch_the_row(): void
     {
-        $row = Mockery::mock(Refund::class);
+        $row = Mockery::mock(OrderTransaction::class);
         $row->shouldNotReceive('fill');
         $row->shouldNotReceive('save');
 
@@ -137,9 +265,9 @@ class FluentCartRefundRepositoryTest extends TestCase
     /**
      * @param array<string, mixed> $expectFill
      */
-    private function makeRowMock(array $expectFill): Refund
+    private function makeRowMock(array $expectFill): OrderTransaction
     {
-        $row = Mockery::mock(Refund::class);
+        $row = Mockery::mock(OrderTransaction::class);
         $row->shouldReceive('fill')->once()->with($expectFill)->andReturnSelf();
         $row->shouldReceive('save')->once()->andReturn(true);
 

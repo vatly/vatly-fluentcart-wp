@@ -141,7 +141,7 @@ final class HandleChargebackReceived implements WebhookReactionInterface
                 if ($hostCustomerId !== null) {
                     return Subscription::query()
                         ->where('customer_id', (int) $hostCustomerId)
-                        ->where('payment_method', 'vatly')
+                        ->where('current_payment_method', 'vatly')
                         ->whereIn('status', ['active', 'trialing', 'failing', 'past_due'])
                         ->orderByDesc('id')
                         ->first();

@@ -18,6 +18,8 @@ use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
 use Vatly\FluentCart\Support\InvoiceShortcodes;
 use Vatly\FluentCart\Support\MoRInvoiceGuard;
+use Vatly\FluentCart\Support\SubscriptionBillingBackfill;
+use Vatly\FluentCart\Support\Upgrader;
 use Vatly\FluentCart\Webhook\EventDispatcher;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReceived;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReversed;
@@ -70,6 +72,13 @@ final class Plugin
 
         add_action('fluent_cart/register_payment_methods', [$this, 'registerGateway']);
         add_action('fluent_cart/payments/subscription_canceled', [$this, 'propagateCancellation'], 10, 1);
+
+        // Schema upgrades + their background data migrations. Wired on every
+        // request (not admin-only): the version gate early-returns once stamped,
+        // and the migration's cron hook must be attached in the hook-less
+        // wp-cron context where the batch runner actually fires.
+        SubscriptionBillingBackfill::register();
+        (new Upgrader())->maybeUpgrade();
 
         (new SubscriptionController($this))->register();
 
@@ -161,7 +170,7 @@ final class Plugin
         }
 
         $subscription = $data['subscription'] ?? null;
-        if (! is_object($subscription) || ($subscription->payment_method ?? null) !== 'vatly') {
+        if (! is_object($subscription) || ($subscription->current_payment_method ?? null) !== 'vatly') {
             return;
         }
 
@@ -210,12 +219,11 @@ final class Plugin
                 // FluentCart order so receipts can link to it. Runs after the
                 // built-in StoreOrderOnPaid that owns the FluentCart-side
                 // transaction confirmation.
-                new StampVatlyInvoiceOnPaid($this),
+                new StampVatlyInvoiceOnPaid(),
                 // MoR polish (refund side): stamp Vatly's credit note URL
-                // onto the FluentCart refund row. The credit note is the
-                // customerInvoice of the credit order Vatly created from
-                // the refund (Refund.orderId → GetOrder → customerInvoice).
-                new StampVatlyCreditNoteOnRefundCompleted($this),
+                // onto the FluentCart refund row. The link rides on the
+                // refund.completed event (customerInvoiceUrl), so no GetOrder.
+                new StampVatlyCreditNoteOnRefundCompleted(),
                 // Dunning: when Vatly fires order.payment_failed (renewal payment
                 // failure / dunning start), flip the FluentCart subscription
                 // to `past_due` so FluentCart's own dunning notifications fire.

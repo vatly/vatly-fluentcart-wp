@@ -124,7 +124,7 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
 
         return Subscription::query()
             ->where('customer_id', (int) $hostCustomerId)
-            ->where('payment_method', 'vatly')
+            ->where('current_payment_method', 'vatly')
             ->whereIn('status', self::DUNNABLE_STATUSES)
             ->orderByDesc('id')
             ->first();
