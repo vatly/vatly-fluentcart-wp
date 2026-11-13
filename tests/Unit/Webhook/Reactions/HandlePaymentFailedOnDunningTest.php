@@ -22,9 +22,10 @@ use Vatly\FluentCart\Webhook\Reactions\HandlePaymentFailedOnDunning;
  *
  * Routes the typed {@see OrderPaymentFailed} event through the reaction the
  * exact same way {@see \Vatly\Fluent\Webhooks\WebhookProcessor::handle()} does
- * (supports() gate + handle()). The two resolution paths — checkout-stamped
- * subscription id and customer-binding fallback — are both exercised
- * end-to-end against the FluentCart Subscription stub.
+ * (supports() gate + handle()). The three resolution paths — checkout-stamped
+ * subscription id, the order lines' subscription link, and the
+ * customer-binding fallback — are exercised end-to-end against the
+ * FluentCart Subscription stub.
  *
  * @covers \Vatly\FluentCart\Webhook\Reactions\HandlePaymentFailedOnDunning
  */
@@ -58,6 +59,20 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         );
     }
 
+    /**
+     * The failed order as `GET /orders/{id}` returns it. By default its line
+     * predates the subscription link, like an order from before Vatly shipped it.
+     */
+    private function plugin(?string $linkedVatlySubscriptionId = null): \Vatly\FluentCart\Plugin
+    {
+        $line = ['id' => 'orderline_1', 'productType' => 'subscription', 'productId' => 'subscription_A'];
+        if ($linkedVatlySubscriptionId !== null) {
+            $line['relatedResources'] = ['subscriptionId' => $linkedVatlySubscriptionId];
+        }
+
+        return $this->pluginReturningOrder($this->vatlyOrder('ord_failed_1', [$line]));
+    }
+
     public function test_flips_attributed_subscription_to_past_due_via_checkout_metadata(): void
     {
         $row = new Subscription();
@@ -71,7 +86,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $bindings = \Mockery::mock(CustomerBindingRepository::class);
         $bindings->shouldNotReceive('hostCustomerIdFor');
 
-        $reaction = new HandlePaymentFailedOnDunning($bindings);
+        $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
 
         Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
         Actions\expectDone('vatly_fluentcart_subscription_past_due')->once();
@@ -82,9 +97,56 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         self::assertSame('past_due', $row->status, 'subscription must flip to FluentCart past_due');
     }
 
+    public function test_flips_the_subscription_the_order_lines_link_to(): void
+    {
+        // The renewal-failure common case: the customer has two Vatly
+        // subscriptions and the failed order's line names the older one. It
+        // must be resolved by its Vatly id, not as the customer's newest.
+        $linked = new Subscription();
+        $linked->id = 12;
+        $linked->status = 'active';
+        $linked->payment_method = 'vatly';
+        $linked->vendor_subscription_id = 'subscription_B';
+
+        Builder::$nextResults = [$linked];
+
+        $bindings = \Mockery::mock(CustomerBindingRepository::class);
+        $bindings->shouldNotReceive('hostCustomerIdFor');
+
+        Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
+
+        (new HandlePaymentFailedOnDunning($this->plugin('subscription_B'), $bindings))->handle($this->event());
+
+        self::assertSame('past_due', $linked->status);
+        self::assertContains(['vendor_subscription_id', 'subscription_B'], Builder::$wheres);
+    }
+
+    public function test_does_not_fall_back_to_another_subscription_when_the_linked_one_is_not_dunnable(): void
+    {
+        // The line names a subscription that's already canceled locally.
+        // Falling back to the customer's newest subscription would put an
+        // unrelated subscription into dunning.
+        $linked = new Subscription();
+        $linked->id = 12;
+        $linked->status = 'canceled';
+        $linked->payment_method = 'vatly';
+
+        Builder::$nextResults = [$linked];
+
+        $bindings = \Mockery::mock(CustomerBindingRepository::class);
+        $bindings->shouldNotReceive('hostCustomerIdFor');
+
+        Functions\expect('error_log')->once();
+        Actions\expectDone('fluent_cart/payments/subscription_past_due')->never();
+
+        (new HandlePaymentFailedOnDunning($this->plugin('subscription_B'), $bindings))->handle($this->event());
+
+        self::assertSame('canceled', $linked->status);
+    }
+
     public function test_flips_subscription_via_customer_binding_fallback(): void
     {
-        // The renewal-failure common case: no checkout-stamped subscription id,
+        // An order without a subscription link (from before Vatly shipped it):
         // resolve via the Vatly→host customer binding, then most-recent active
         // subscription for that customer.
         $row = new Subscription();
@@ -97,7 +159,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $bindings = \Mockery::mock(CustomerBindingRepository::class);
         $bindings->shouldReceive('hostCustomerIdFor')->once()->with('cus_123')->andReturn('42');
 
-        $reaction = new HandlePaymentFailedOnDunning($bindings);
+        $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
 
         Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
 
@@ -120,7 +182,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
 
         $bindings = \Mockery::mock(CustomerBindingRepository::class);
 
-        $reaction = new HandlePaymentFailedOnDunning($bindings);
+        $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
 
         Actions\expectDone('fluent_cart/payments/subscription_past_due')->never();
         Actions\expectDone('vatly_fluentcart_subscription_past_due')->never();
@@ -139,7 +201,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         Functions\expect('error_log')->once();
         Actions\expectDone('fluent_cart/payments/subscription_past_due')->never();
 
-        $reaction = new HandlePaymentFailedOnDunning($bindings);
+        $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
         $reaction->handle($this->event());
 
         $this->assertHookExpectations();

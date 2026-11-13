@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\Webhook\Reactions;
 
 use FluentCart\App\Models\Subscription;
+use Throwable;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\OrderPaymentFailed;
+use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\Support\LinkedSubscription;
 
 /**
  * On Vatly `order.payment_failed` (typically the start of dunning): mark the
@@ -20,10 +23,12 @@ use Vatly\API\Webhooks\Events\OrderPaymentFailed;
  *      time and the failure relates to that specific order. (Rare in
  *      practice — initial subscription checkouts fail at the checkout step,
  *      not via `order.payment_failed`.)
- *   2. The FluentCart customer bound to the Vatly customer id (via
+ *   2. The subscription the failed order's lines link to
+ *      (`lines[].relatedResources.subscriptionId`, read with one GET of the
+ *      order). This is the renewal-failure path, which is the common case.
+ *   3. The FluentCart customer bound to the Vatly customer id (via
  *      CustomerBindingRepository) → most-recently active subscription for
- *      that customer. This is the renewal-failure path, which is the
- *      common case.
+ *      that customer, for orders without a link.
  *
  * Mirrors the lookup shape of the renewal `order.paid` recovery path in
  * {@see \Vatly\FluentCart\Repositories\FluentCartOrderRepository::recordRenewal()}
@@ -43,7 +48,15 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
      */
     public const PAST_DUE_STATUS = 'past_due';
 
+    /**
+     * Statuses a failed payment may move to `past_due`. Includes the dunning
+     * states so a re-delivered order.payment_failed (or a second failed
+     * retry) still resolves a subscription we already flipped.
+     */
+    private const DUNNABLE_STATUSES = ['active', 'trialing', 'failing', self::PAST_DUE_STATUS];
+
     public function __construct(
+        private Plugin $plugin,
         private CustomerBindingRepository $bindings,
     ) {}
 
@@ -97,20 +110,35 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
             }
         }
 
+        // The order's lines name the subscription exactly. When they do, never
+        // fall back to a different subscription of the same customer.
+        $linked = $this->linkedSubscription($event);
+        if ($linked !== null) {
+            return in_array((string) $linked->status, self::DUNNABLE_STATUSES, true) ? $linked : null;
+        }
+
         $hostCustomerId = $this->bindings->hostCustomerIdFor($event->customerId);
         if ($hostCustomerId === null) {
             return null;
         }
 
-        // Include the dunning states too: a re-delivered order.payment_failed
-        // (or a second failed retry) must still resolve a subscription we've
-        // already flipped to past_due / failing, otherwise the redelivery
-        // would fall through to the "could not attribute" log.
         return Subscription::query()
             ->where('customer_id', (int) $hostCustomerId)
             ->where('payment_method', 'vatly')
-            ->whereIn('status', ['active', 'trialing', 'failing', self::PAST_DUE_STATUS])
+            ->whereIn('status', self::DUNNABLE_STATUSES)
             ->orderByDesc('id')
             ->first();
+    }
+
+    private function linkedSubscription(OrderPaymentFailed $event): ?Subscription
+    {
+        try {
+            $order = $this->plugin->vatlyForTestmode($event->testmode)->getOrder()->execute($event->orderId);
+        } catch (Throwable $e) {
+            error_log('[vatly-for-fluentcart] order.payment_failed: failed to fetch Vatly order: ' . $e->getMessage());
+            return null;
+        }
+
+        return LinkedSubscription::forOrder($order);
     }
 }

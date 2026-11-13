@@ -11,6 +11,7 @@ use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\OrderChargebackReceived;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\Support\LinkedSubscription;
 
 /**
  * On Vatly `order.chargeback_received`: flip the FluentCart subscription tied
@@ -29,7 +30,9 @@ use Vatly\FluentCart\Plugin;
  *      (set during the initial confirmation pass) → its `subscription_id`.
  *   2. Fall back to the Vatly order's `metadata.fluentcart_subscription_id`
  *      stamped at checkout time (initial payments only).
- *   3. Final fallback: customer-binding → most-recent active subscription.
+ *   3. The subscription the order's lines link to
+ *      (`lines[].relatedResources.subscriptionId`).
+ *   4. Final fallback: customer-binding → most-recent active subscription.
  *
  * Non-subscription order chargebacks (one-time purchases) don't have a
  * subscription to update — only the `vatly_fluentcart_chargeback_received`
@@ -124,8 +127,14 @@ final class HandleChargebackReceived implements WebhookReactionInterface
                 }
             }
 
-            // (3) Customer binding → most-recent active subscription for that
-            //     customer. Renewal-order chargebacks land here.
+            // (3) The subscription the order's lines link to.
+            $sub = LinkedSubscription::forOrder($vatlyOrder);
+            if ($sub !== null) {
+                return $sub;
+            }
+
+            // (4) Customer binding → most-recent active subscription for that
+            //     customer, for orders without a link.
             $vatlyCustomerId = (string) ($vatlyOrder->customerId ?? '');
             if ($vatlyCustomerId !== '') {
                 $hostCustomerId = $this->bindings->hostCustomerIdFor($vatlyCustomerId);
