@@ -219,7 +219,7 @@ final class Plugin
                 // Dunning: when Vatly fires order.payment_failed (renewal payment
                 // failure / dunning start), flip the FluentCart subscription
                 // to `past_due` so FluentCart's own dunning notifications fire.
-                new HandlePaymentFailedOnDunning($bindings),
+                new HandlePaymentFailedOnDunning($this, $bindings),
                 // Chargebacks: vatly-fluent-php dispatches the typed events
                 // but ships no built-in reaction. Flip to `paused` on receipt
                 // (revoke access), restore on reversal, fire WP actions for

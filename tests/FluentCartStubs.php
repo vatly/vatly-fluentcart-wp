@@ -62,11 +62,28 @@ namespace FluentCart\App {
          */
         public static array $nextResults = [];
 
-        /** Reset the staged-result queue (call in test setUp/tearDown). */
-        public static function reset(): void { self::$nextResults = []; }
+        /**
+         * phpunit-only test seam: every `where($column, $value)` call, in
+         * order, so tests can assert which lookup resolved a row.
+         *
+         * @var array<int, array{0: string, 1: mixed}>
+         */
+        public static array $wheres = [];
+
+        /** Reset the staged-result queue and where log (call in test setUp/tearDown). */
+        public static function reset(): void
+        {
+            self::$nextResults = [];
+            self::$wheres      = [];
+        }
 
         /** @return static<TModel> */
-        public function where(string $column, mixed $value = null, mixed $extra = null): self { return $this; }
+        public function where(string $column, mixed $value = null, mixed $extra = null): self
+        {
+            self::$wheres[] = [$column, $value];
+
+            return $this;
+        }
 
         /** @param array<int|string, mixed> $values
          *  @return static<TModel> */
@@ -297,7 +314,13 @@ namespace FluentCart\App\Services\Subscription {
 
     class SubscriptionRenewal
     {
+        /** @var array{0: Subscription, 1: array<string, mixed>}|null phpunit-only: the last recorded renewal */
+        public static ?array $lastRecorded = null;
+
         /** @param array<string, mixed> $args */
-        public static function recordRenewalPayment(Subscription $subscription, array $args): void {}
+        public static function recordRenewalPayment(Subscription $subscription, array $args): void
+        {
+            self::$lastRecorded = [$subscription, $args];
+        }
     }
 }

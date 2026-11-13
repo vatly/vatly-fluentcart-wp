@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Tests\Unit\Repositories;
 
+use Brain\Monkey\Functions;
+use FluentCart\App\Builder;
 use FluentCart\App\Models\OrderTransaction;
+use FluentCart\App\Models\Subscription;
+use FluentCart\App\Services\Subscription\SubscriptionRenewal;
 use Mockery;
 use Vatly\Fluent\Contracts\OrderInterface;
+use Vatly\Fluent\Data\StoreOrderData;
 use Vatly\Fluent\Data\UpdateOrderData;
 use Vatly\FluentCart\Models\FluentCartOrder;
 use Vatly\FluentCart\Plugin;
@@ -14,16 +19,114 @@ use Vatly\FluentCart\Repositories\FluentCartOrderRepository;
 use Vatly\FluentCart\Tests\TestCase;
 
 /**
- * Unit coverage of the FluentCartOrderRepository::update() routing.
+ * Unit coverage of the FluentCartOrderRepository::update() routing, and of
+ * which subscription store() records a renewal on.
  *
- * The store()-side routing (initial-payment vs renewal, metadata fetch,
- * fallback orphan-wrap) is dominated by static query() calls on FluentCart
- * Eloquent models — that surface is covered by integration tests (PR C).
+ * The rest of the store()-side routing (initial payment, guest claim-back,
+ * orphan-wrap) is dominated by static query() calls on FluentCart Eloquent
+ * models — that surface is covered by integration tests (PR C).
  *
  * @covers \Vatly\FluentCart\Repositories\FluentCartOrderRepository
  */
 class FluentCartOrderRepositoryTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Builder::reset();
+        SubscriptionRenewal::$lastRecorded = null;
+    }
+
+    protected function tearDown(): void
+    {
+        Builder::reset();
+        parent::tearDown();
+    }
+
+    public function test_renewal_is_recorded_on_the_subscription_the_order_lines_link_to(): void
+    {
+        // The customer has two Vatly subscriptions; the renewal's line names
+        // the older one. It must be resolved by its Vatly id, not picked as
+        // the customer's newest active subscription.
+        $linked = $this->subscription(12, 'active');
+        Builder::$nextResults = [$linked, $this->renewalTransaction()];
+
+        $this->storeRenewal(['subscriptionId' => 'subscription_B']);
+
+        self::assertSame($linked, SubscriptionRenewal::$lastRecorded[0] ?? null);
+        self::assertContains(['vendor_subscription_id', 'subscription_B'], Builder::$wheres);
+        self::assertNotContains(['customer_id', '42'], Builder::$wheres);
+    }
+
+    public function test_renewal_falls_back_to_the_customers_newest_subscription_without_a_link(): void
+    {
+        // A line from before Vatly shipped the link carries no relatedResources.
+        $newest = $this->subscription(30, 'past_due');
+        Builder::$nextResults = [$newest, $this->renewalTransaction()];
+
+        $this->storeRenewal(null);
+
+        self::assertSame($newest, SubscriptionRenewal::$lastRecorded[0] ?? null);
+        self::assertContains(['customer_id', '42'], Builder::$wheres);
+        self::assertSame('active', $newest->status, 'a renewal recovers a subscription in dunning');
+    }
+
+    public function test_renewal_is_not_recorded_on_another_subscription_when_the_linked_one_is_not_renewable(): void
+    {
+        Builder::$nextResults = [$this->subscription(12, 'canceled'), $this->subscription(30, 'active')];
+        Functions\expect('error_log')->once();
+
+        $result = $this->storeRenewal(['subscriptionId' => 'subscription_B']);
+
+        self::assertNull(SubscriptionRenewal::$lastRecorded);
+        self::assertSame('order_renewal_1', $result->getVatlyId());
+    }
+
+    /**
+     * Run store() for a paid renewal: no checkout transaction metadata, and a
+     * host customer resolved through the customer bindings.
+     *
+     * @param array<string, mixed>|null $relatedResources the line's relatedResources, or null to leave it out
+     */
+    private function storeRenewal(?array $relatedResources): OrderInterface
+    {
+        $line = ['id' => 'orderline_1', 'productType' => 'subscription', 'productId' => 'subscription_B'];
+        if ($relatedResources !== null) {
+            $line['relatedResources'] = $relatedResources;
+        }
+
+        $plugin = $this->pluginReturningOrder($this->vatlyOrder('order_renewal_1', [$line]));
+
+        return (new FluentCartOrderRepository($plugin))->store(new StoreOrderData(
+            vatlyId:        'order_renewal_1',
+            customerId:     'customer_1',
+            status:         'paid',
+            total:          1210,
+            currency:       'EUR',
+            testmode:       false,
+            hostCustomerId: '42',
+        ));
+    }
+
+    private function subscription(int $id, string $status): Subscription
+    {
+        $subscription = new Subscription();
+        $subscription->id = $id;
+        $subscription->status = $status;
+        $subscription->payment_method = 'vatly';
+
+        return $subscription;
+    }
+
+    private function renewalTransaction(): OrderTransaction
+    {
+        $transaction = new OrderTransaction();
+        $transaction->id = 99;
+        $transaction->vendor_charge_id = 'order_renewal_1';
+
+        return $transaction;
+    }
+
     public function test_update_short_circuits_for_foreign_order_interface(): void
     {
         $foreign = Mockery::mock(OrderInterface::class);

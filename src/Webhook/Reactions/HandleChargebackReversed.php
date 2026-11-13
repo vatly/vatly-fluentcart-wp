@@ -11,6 +11,7 @@ use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\OrderChargebackReversed;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\Support\LinkedSubscription;
 
 /**
  * On Vatly `order.chargeback_reversed`: restore the FluentCart subscription
@@ -101,6 +102,11 @@ final class HandleChargebackReversed implements WebhookReactionInterface
             if ($sub !== null) {
                 return $sub;
             }
+        }
+
+        $sub = LinkedSubscription::forOrder($vatlyOrder);
+        if ($sub !== null) {
+            return $sub;
         }
 
         $vatlyCustomerId = (string) ($vatlyOrder->customerId ?? '');
