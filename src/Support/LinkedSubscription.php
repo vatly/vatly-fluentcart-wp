@@ -6,6 +6,7 @@ namespace Vatly\FluentCart\Support;
 
 use FluentCart\App\Models\Subscription;
 use Vatly\API\Resources\Order;
+use Vatly\API\Types\OrderLineData;
 
 /**
  * Resolves the FluentCart subscription a Vatly order belongs to from the
@@ -30,7 +31,18 @@ final class LinkedSubscription
      */
     public static function forOrder(Order $order): ?Subscription
     {
-        foreach ($order->lines() as $line) {
+        return self::forLines($order->lines());
+    }
+
+    /**
+     * Same as {@see self::forOrder()}, for lines a webhook event already
+     * carries.
+     *
+     * @param iterable<int, OrderLineData|\Vatly\API\Resources\OrderLine> $lines
+     */
+    public static function forLines(iterable $lines): ?Subscription
+    {
+        foreach ($lines as $line) {
             $vatlySubscriptionId = (string) ($line->relatedResources->subscriptionId ?? '');
             if ($vatlySubscriptionId === '') {
                 continue;
