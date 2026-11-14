@@ -24,8 +24,10 @@ use Vatly\FluentCart\Support\LinkedSubscription;
  *      practice — initial subscription checkouts fail at the checkout step,
  *      not via `order.payment_failed`.)
  *   2. The subscription the failed order's lines link to
- *      (`lines[].relatedResources.subscriptionId`, read with one GET of the
- *      order). This is the renewal-failure path, which is the common case.
+ *      (`lines[].relatedResources.subscriptionId`). The event carries the
+ *      lines; when it has none (a webhook stored before the SDK carried
+ *      them), one GET of the order reads them. This is the renewal-failure
+ *      path, which is the common case.
  *   3. The FluentCart customer bound to the Vatly customer id (via
  *      CustomerBindingRepository) → most-recently active subscription for
  *      that customer, for orders without a link.
@@ -132,6 +134,10 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
 
     private function linkedSubscription(OrderPaymentFailed $event): ?Subscription
     {
+        if ($event->lines !== []) {
+            return LinkedSubscription::forLines($event->lines);
+        }
+
         try {
             $order = $this->plugin->vatlyForTestmode($event->testmode)->getOrder()->execute($event->orderId);
         } catch (Throwable $e) {
