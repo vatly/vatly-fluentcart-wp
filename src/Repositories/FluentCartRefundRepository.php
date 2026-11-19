@@ -198,11 +198,11 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
             if (is_wp_error($recorded)) {
                 // The order's refund lock stayed busy: fail the webhook so
                 // Vatly redelivers it instead of losing the transition.
-                throw new RuntimeException(sprintf(
+                throw new RuntimeException(esc_html(sprintf(
                     '[vatly-for-fluentcart] could not record refund %s: %s',
                     (string) $row->vendor_charge_id,
                     $recorded->get_error_message(),
-                ));
+                )));
             }
 
             return new FluentCartRefund($recorded);
@@ -219,8 +219,7 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
      */
     private function parentCharge(OrderTransaction $row): ?OrderTransaction
     {
-        $meta     = is_array($row->meta ?? null) ? $row->meta : [];
-        $parentId = (int) ($meta['parent_id'] ?? 0);
+        $parentId = (int) ($row->meta['parent_id'] ?? 0);
         if ($parentId <= 0) {
             return null;
         }
