@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\Support;
 
 use FluentCart\App\Events\Order\OrderPaymentFailed;
+use FluentCart\App\Events\Order\OrderStatusUpdated;
 use FluentCart\App\Models\OrderTransaction;
 use Vatly\API\Types\Money;
 
@@ -16,6 +17,10 @@ use Vatly\API\Types\Money;
  * dispatches FluentCart's `OrderPaymentFailed` event
  * (`fluent_cart/order_payment_failed`), which other plugins can listen to for
  * one-off orders as well as subscription orders. A reversal undoes the booking.
+ * Both directions also dispatch FluentCart's `OrderStatusUpdated` for the
+ * payment status (`fluent_cart/payment_status_changed` and
+ * `fluent_cart/payment_status_changed_to_{status}`), so a plugin that revoked
+ * access on the chargeback can grant it back when the chargeback is reversed.
  *
  * Both directions are keyed on the Vatly chargeback id stored in the
  * transaction meta, so a re-delivered webhook changes nothing.
@@ -56,6 +61,8 @@ final class ChargebackBooking
         $order->payment_status = $newStatus;
         $order->save();
 
+        (new OrderStatusUpdated($order, $oldStatus, $newStatus, false, [], 'payment_status'))->dispatch();
+
         (new OrderPaymentFailed(
             $order,
             $transaction,
@@ -81,11 +88,15 @@ final class ChargebackBooking
         $transaction->meta             = array_merge($meta, ['dispute_status' => 'won']);
         $transaction->save();
 
-        $order = $transaction->order;
-        $paid  = (int) $order->total_paid + (int) ($meta['vatly_chargeback_amount'] ?? $transaction->total);
+        $order     = $transaction->order;
+        $oldStatus = (string) $order->payment_status;
+        $paid      = (int) $order->total_paid + (int) ($meta['vatly_chargeback_amount'] ?? $transaction->total);
+        $newStatus = $paid >= (int) $order->total_amount ? 'paid' : 'partially_paid';
         $order->total_paid     = $paid;
-        $order->payment_status = $paid >= (int) $order->total_amount ? 'paid' : 'partially_paid';
+        $order->payment_status = $newStatus;
         $order->save();
+
+        (new OrderStatusUpdated($order, $oldStatus, $newStatus, false, [], 'payment_status'))->dispatch();
         $order->addLog(
             __('Chargeback reversed', 'vatly-for-fluentcart'),
             __('The chargeback was reversed through Vatly and the payment is restored.', 'vatly-for-fluentcart'),

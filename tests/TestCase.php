@@ -34,6 +34,7 @@ abstract class TestCase extends PhpUnitTestCase
         \FluentCart\App\Modules\Subscriptions\Services\SubscriptionService::reset();
         \FluentCart\App\Events\Subscription\SubscriptionActivated::$dispatched = [];
         \FluentCart\App\Events\Order\OrderPaymentFailed::$dispatched = [];
+        \FluentCart\App\Events\Order\OrderStatusUpdated::$dispatched = [];
 
         $this->setupCommonStubs();
     }
@@ -81,6 +82,19 @@ abstract class TestCase extends PhpUnitTestCase
         Monkey\Functions\when('plugin_dir_path')->returnArg(1);
         Monkey\Functions\when('plugin_dir_url')->returnArg(1);
         Monkey\Functions\when('current_user_can')->justReturn(true);
+
+        $GLOBALS['vatly_test_transients'] = [];
+        Monkey\Functions\when('get_transient')->alias(static fn (string $key) => $GLOBALS['vatly_test_transients'][$key] ?? false);
+        Monkey\Functions\when('set_transient')->alias(static function (string $key, $value): bool {
+            $GLOBALS['vatly_test_transients'][$key] = $value;
+
+            return true;
+        });
+        Monkey\Functions\when('delete_transient')->alias(static function (string $key): bool {
+            unset($GLOBALS['vatly_test_transients'][$key]);
+
+            return true;
+        });
     }
 
     /**

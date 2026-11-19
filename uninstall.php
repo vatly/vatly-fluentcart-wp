@@ -25,6 +25,15 @@ foreach (['fluent_cart_vatly_settings', 'vatly_fluentcart_db_version', 'vatly_fl
     delete_option($vatlyFluentCartOption);
 }
 
+// Short-lived transients (cancellations in flight). Expired ones stay in the
+// options table until read, so remove them by prefix.
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+$wpdb->query($wpdb->prepare(
+    "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+    $wpdb->esc_like('_transient_vatly_fluentcart_') . '%',
+    $wpdb->esc_like('_transient_timeout_vatly_fluentcart_') . '%'
+));
+
 // FluentCart keeps gateway settings in its own meta table.
 $vatlyFluentCartMeta = $wpdb->prefix . 'fct_meta';
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery

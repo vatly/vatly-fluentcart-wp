@@ -6,6 +6,7 @@ namespace Vatly\FluentCart\Tests\Unit\Support;
 
 use FluentCart\App\Builder;
 use FluentCart\App\Events\Order\OrderPaymentFailed;
+use FluentCart\App\Events\Order\OrderStatusUpdated;
 use FluentCart\App\Models\Order;
 use FluentCart\App\Models\OrderTransaction;
 use Vatly\API\Types\Money;
@@ -56,6 +57,13 @@ final class ChargebackBookingTest extends TestCase
         self::assertSame(1000, $order->total_paid);
         self::assertSame('paid', $order->payment_status);
         self::assertCount(1, $order->logs);
+
+        // Both directions announce the payment status change through
+        // FluentCart, once each, so access can be revoked and granted back.
+        self::assertSame(
+            [['paid', 'failed', 'payment_status'], ['failed', 'paid', 'payment_status']],
+            array_map(static fn (OrderStatusUpdated $e): array => [$e->oldStatus, $e->newStatus, $e->type], OrderStatusUpdated::$dispatched),
+        );
     }
 
     public function test_a_partial_chargeback_leaves_the_order_partially_paid(): void

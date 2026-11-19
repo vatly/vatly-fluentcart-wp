@@ -12,6 +12,7 @@ use Mockery;
 use Vatly\Fluent\Contracts\SubscriptionInterface;
 use Vatly\Fluent\Data\UpdateSubscriptionData;
 use Vatly\FluentCart\Models\FluentCartSubscription;
+use Vatly\FluentCart\PaymentMethod\VatlySubscriptions;
 use Vatly\FluentCart\Plugin;
 use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Tests\TestCase;
@@ -156,6 +157,25 @@ class FluentCartSubscriptionRepositoryTest extends TestCase
         self::assertSame('canceled', $row->status);
         self::assertSame('2026-12-31 00:00:00', $row->next_billing_date);
         self::assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', (string) $row->canceled_at);
+    }
+
+    public function test_cancel_webhook_during_fluentcarts_own_cancel_leaves_the_status_to_fluentcart(): void
+    {
+        // The admin cancel is still running when Vatly's webhook lands. That
+        // request writes `canceled` and fires the cancel event itself, so the
+        // webhook records only the end date and the event fires once.
+        $row = new Subscription();
+        $row->id = 7;
+        $row->status = 'past_due';
+        set_transient(VatlySubscriptions::cancelInFlightKey(7), 1, 120);
+
+        (new FluentCartSubscriptionRepository($this->plugin()))->update(
+            new FluentCartSubscription($row),
+            new UpdateSubscriptionData(endsAt: new DateTimeImmutable('2026-12-31 00:00:00')),
+        );
+
+        self::assertSame('past_due', $row->status);
+        self::assertSame('2026-12-31 00:00:00', $row->next_billing_date);
     }
 
     public function test_update_persists_cancellation_reason_meta_when_provided(): void

@@ -45,6 +45,10 @@ final class HandleChargebackReversed implements WebhookReactionInterface
             return;
         }
 
+        // Restore the order first, so subscription listeners already see
+        // the order paid again.
+        ChargebackBooking::reverse($event->originalOrderId, $event->chargebackId);
+
         $subscription = $this->resolveSubscription($event->originalOrderId);
 
         if ($subscription !== null && ($subscription->status ?? null) === 'paused') {
@@ -67,8 +71,6 @@ final class HandleChargebackReversed implements WebhookReactionInterface
             $subscription = SubscriptionService::syncSubscriptionStates($subscription, ['status' => $restoreTo]) ?? $subscription;
             $subscription->updateMeta(HandleChargebackReceived::PRE_CHARGEBACK_STATUS_META, '');
         }
-
-        ChargebackBooking::reverse($event->originalOrderId, $event->chargebackId);
 
         do_action(
             'vatly_fluentcart_chargeback_reversed',

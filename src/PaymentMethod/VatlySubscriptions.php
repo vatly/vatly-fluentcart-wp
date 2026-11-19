@@ -20,7 +20,18 @@ use WP_Error;
  */
 final class VatlySubscriptions extends AbstractSubscriptionModule
 {
+    private const CANCEL_IN_FLIGHT_SECONDS = 120;
+
     public function __construct(private Plugin $plugin) {}
+
+    /**
+     * Transient set while FluentCart cancels a subscription through
+     * {@see self::cancel()}.
+     */
+    public static function cancelInFlightKey(int $fluentCartSubscriptionId): string
+    {
+        return 'vatly_fluentcart_cancel_in_flight_' . $fluentCartSubscriptionId;
+    }
 
     /**
      * @param string               $vendorSubscriptionId The Vatly subscription id.
@@ -41,9 +52,18 @@ final class VatlySubscriptions extends AbstractSubscriptionModule
 
         $vatly = $this->plugin->vatlyForTestmode(($args['mode'] ?? 'test') !== 'live');
 
+        // Vatly confirms the cancellation with a webhook that can arrive while
+        // this request is still running. FluentCart writes `canceled` and fires
+        // its cancel event after this method returns, so the webhook leaves the
+        // status to it; otherwise the event would fire twice.
+        $inFlightKey = self::cancelInFlightKey((int) $subscription->id);
+        set_transient($inFlightKey, 1, self::CANCEL_IN_FLIGHT_SECONDS);
+
         try {
             $vatly->subscription(new FluentCartSubscription($subscription))->cancel();
         } catch (Throwable $e) {
+            delete_transient($inFlightKey);
+
             return new WP_Error(
                 'vatly_cancel_failed',
                 /* translators: %s: error message returned by the Vatly API */

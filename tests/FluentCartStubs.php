@@ -659,4 +659,15 @@ namespace FluentCart\App\Events\Order {
 
         public function dispatch(): void { self::$dispatched[] = $this; }
     }
+
+    class OrderStatusUpdated
+    {
+        /** @var array<int, self> phpunit-only */
+        public static array $dispatched = [];
+
+        /** @param array<string, mixed> $activity */
+        public function __construct(public mixed $order, public mixed $oldStatus = null, public mixed $newStatus = null, public mixed $manageStock = true, public array $activity = [], public string $type = 'payment_status') {}
+
+        public function dispatch(): void { self::$dispatched[] = $this; }
+    }
 }

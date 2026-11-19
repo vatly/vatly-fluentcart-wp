@@ -15,6 +15,7 @@ use Vatly\Fluent\Data\StoreSubscriptionData;
 use Vatly\Fluent\Data\UpdateSubscriptionData;
 use Vatly\FluentCart\Models\FluentCartSubscription;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\PaymentMethod\VatlySubscriptions;
 
 /**
  * Bridges fluent's SubscriptionRepository contract to FluentCart's data layer.
@@ -144,7 +145,12 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
             // `next_billing_date` and expires it after that, so that column
             // carries Vatly's end date (now for an immediate cancellation, the
             // period end for a grace-period one).
-            $dirty['status']            = 'canceled';
+            // While FluentCart itself is cancelling it (admin or customer
+            // portal), that request sets the status and fires the cancel
+            // event; this webhook only records the end date.
+            if (! get_transient(VatlySubscriptions::cancelInFlightKey((int) ($row->id ?? 0)))) {
+                $dirty['status'] = 'canceled';
+            }
             $dirty['canceled_at']       = $row->canceled_at ?: (new DateTimeImmutable())->format('Y-m-d H:i:s');
             $dirty['next_billing_date'] = $data->endsAt->format('Y-m-d H:i:s');
         }

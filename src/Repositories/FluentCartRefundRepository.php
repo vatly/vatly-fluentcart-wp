@@ -7,6 +7,7 @@ namespace Vatly\FluentCart\Repositories;
 use FluentCart\App\Helpers\Status;
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Services\Payments\Refund;
+use RuntimeException;
 use Vatly\API\Types\RefundStatus as VatlyRefundStatus;
 use Vatly\Fluent\Contracts\RefundInterface;
 use Vatly\Fluent\Contracts\RefundRepositoryInterface;
@@ -177,11 +178,59 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
         // StampVatlyCreditNoteOnRefundCompleted). This reaction only owns the
         // status transition (pending -> refunded / failed).
 
-        if ($dirty !== []) {
-            $row->fill($dirty)->save();
+        if ($dirty === []) {
+            return $refund;
         }
 
+        // Hand the transition to FluentCart, which moves the row out of
+        // pending, recounts the order's refunded totals and fires its
+        // OrderRefund event (`fluent_cart/order_refunded`) that other plugins
+        // listen to. A plain column write would skip all three.
+        $parent = $this->parentCharge($row);
+        if ($parent instanceof OrderTransaction) {
+            $recorded = Refund::createOrRecordRefund([
+                'vendor_charge_id' => (string) $row->vendor_charge_id,
+                'payment_method'   => 'vatly',
+                'status'           => $dirty['status'],
+                'total'            => (int) $row->total,
+            ], $parent);
+
+            if (is_wp_error($recorded)) {
+                // The order's refund lock stayed busy: fail the webhook so
+                // Vatly redelivers it instead of losing the transition.
+                throw new RuntimeException(sprintf(
+                    '[vatly-for-fluentcart] could not record refund %s: %s',
+                    (string) $row->vendor_charge_id,
+                    $recorded->get_error_message(),
+                ));
+            }
+
+            return new FluentCartRefund($recorded);
+        }
+
+        $row->fill($dirty)->save();
+
         return new FluentCartRefund($row);
+    }
+
+    /**
+     * The charge a refund row belongs to. FluentCart stamps it as `parent_id`
+     * in the refund's meta whenever it records a refund.
+     */
+    private function parentCharge(OrderTransaction $row): ?OrderTransaction
+    {
+        $meta     = is_array($row->meta ?? null) ? $row->meta : [];
+        $parentId = (int) ($meta['parent_id'] ?? 0);
+        if ($parentId <= 0) {
+            return null;
+        }
+
+        $parent = OrderTransaction::query()
+            ->where('id', $parentId)
+            ->where('transaction_type', Status::TRANSACTION_TYPE_CHARGE)
+            ->first();
+
+        return $parent instanceof OrderTransaction ? $parent : null;
     }
 
     /**

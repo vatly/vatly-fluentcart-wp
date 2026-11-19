@@ -69,6 +69,10 @@ final class HandleChargebackReceived implements WebhookReactionInterface
             return;
         }
 
+        // Book the order first, so subscription listeners already see the
+        // order's new payment status.
+        ChargebackBooking::recordLost($event->originalOrderId, $event->chargebackId, $event->subtotal, $event->reason);
+
         $subscription = $this->resolveSubscription($event->originalOrderId);
 
         if ($subscription !== null) {
@@ -88,8 +92,6 @@ final class HandleChargebackReceived implements WebhookReactionInterface
             // FluentCart's own state sync fires its pause hooks.
             $subscription = SubscriptionService::syncSubscriptionStates($subscription, ['status' => 'paused']) ?? $subscription;
         }
-
-        ChargebackBooking::recordLost($event->originalOrderId, $event->chargebackId, $event->subtotal, $event->reason);
 
         do_action(
             'vatly_fluentcart_chargeback_received',
