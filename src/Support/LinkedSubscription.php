@@ -42,17 +42,30 @@ final class LinkedSubscription
      */
     public static function forLines(iterable $lines): ?Subscription
     {
+        $vatlySubscriptionId = self::vatlySubscriptionId($lines);
+        if ($vatlySubscriptionId === null) {
+            return null;
+        }
+
+        return Subscription::query()
+            ->where('vendor_subscription_id', $vatlySubscriptionId)
+            ->where('current_payment_method', 'vatly')
+            ->first();
+    }
+
+    /**
+     * The Vatly subscription id the lines link to. A Vatly order belongs to
+     * one subscription, so the first link decides.
+     *
+     * @param iterable<int, OrderLineData|\Vatly\API\Resources\OrderLine> $lines
+     */
+    public static function vatlySubscriptionId(iterable $lines): ?string
+    {
         foreach ($lines as $line) {
             $vatlySubscriptionId = (string) ($line->relatedResources->subscriptionId ?? '');
-            if ($vatlySubscriptionId === '') {
-                continue;
+            if ($vatlySubscriptionId !== '') {
+                return $vatlySubscriptionId;
             }
-
-            // A Vatly order belongs to one subscription, so the first link decides.
-            return Subscription::query()
-                ->where('vendor_subscription_id', $vatlySubscriptionId)
-                ->where('payment_method', 'vatly')
-                ->first();
         }
 
         return null;

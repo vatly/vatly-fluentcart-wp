@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Support;
 
+use Vatly\FluentCart\PaymentMethod\VatlySettings;
+
 /**
  * Version-gated upgrade routine.
  *
@@ -43,6 +45,10 @@ final class Upgrader
 
     public function maybeUpgrade(): void
     {
+        // Not version-gated: builds before 0.1.2-alpha never stamped a version
+        // this could compare against, and the check is one autoloaded option.
+        VatlySettings::migrateLegacyOption();
+
         $stored = (string) get_option(self::DB_VERSION_OPTION, '0');
 
         if (version_compare($stored, $this->currentVersion, '>=')) {

@@ -100,6 +100,18 @@ final class VatlyGateway extends AbstractPaymentGateway
     }
 
     /**
+     * FluentCart calls this before it saves the settings screen.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $oldSettings
+     * @return array<string, mixed>
+     */
+    public static function beforeSettingsUpdate($data, $oldSettings): array
+    {
+        return VatlySettings::encryptSecrets((array) $data);
+    }
+
+    /**
      * Settings fields for FluentCart's gateway screen. FluentCart saves them
      * under {@see VatlySettings::METHOD_HANDLER}. Test or live follows the
      * store mode, so both key pairs are always shown.

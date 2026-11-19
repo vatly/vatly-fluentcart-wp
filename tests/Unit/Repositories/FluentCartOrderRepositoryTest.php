@@ -55,7 +55,30 @@ class FluentCartOrderRepositoryTest extends TestCase
 
         self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
         self::assertContains(['vendor_subscription_id', 'subscription_B'], Builder::$wheres);
+        self::assertContains(['current_payment_method', 'vatly'], Builder::$wheres);
         self::assertNotContains(['customer_id', '42'], Builder::$wheres);
+    }
+
+    public function test_a_guests_renewal_is_recorded_by_its_line_link_without_a_customer_binding(): void
+    {
+        // A guest checkout records no customer binding, so hostCustomerId is
+        // null. The line link alone must route the renewal.
+        $linked = $this->subscription(12, 'active');
+        Builder::$nextResults = [$linked, $this->renewalTransaction()];
+
+        $line   = ['id' => 'orderline_1', 'productType' => 'subscription_plan', 'productId' => 'plan_1', 'relatedResources' => ['subscriptionId' => 'subscription_B']];
+        $plugin = $this->pluginReturningOrder($this->vatlyOrder('order_renewal_1', [$line]));
+
+        (new FluentCartOrderRepository($plugin))->store(new StoreOrderData(
+            vatlyId:  'order_renewal_1',
+            customerId: 'customer_1',
+            status:   'paid',
+            total:    2420,
+            currency: 'EUR',
+            testmode: false,
+        ));
+
+        self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
     }
 
     public function test_renewal_falls_back_to_the_customers_newest_subscription_without_a_link(): void
@@ -103,6 +126,56 @@ class FluentCartOrderRepositoryTest extends TestCase
             SubscriptionService::$lastRecorded[2] ?? null,
         );
         self::assertSame('2026-12-19 09:00:00', $linked->next_billing_date);
+        self::assertSame(1000, SubscriptionService::$lastRecorded[1]['total'] ?? null, 'the net, not Vatly\'s gross');
+    }
+
+    public function test_the_initial_paid_order_links_and_activates_the_checkout_subscription(): void
+    {
+        // Vatly copies checkout metadata onto the order, not the subscription.
+        // So the signup's order.paid links the two: its metadata names the
+        // FluentCart subscription, its line the Vatly one.
+        $checkout = new OrderTransaction();
+        $checkout->id = 5;
+        $checkout->status = 'pending';
+        $subscription = $this->subscription(12, 'intended');
+        Builder::$nextResults = [$checkout, $subscription, $checkout];
+
+        $plugin = $this->pluginReturningOrder(
+            $this->vatlyOrder('order_signup_1', []),
+            $this->vatlySubscription('subscription_B', [
+                'customerId'         => 'customer_1',
+                'subscriptionPlanId' => 'subscription_plan_1',
+                'quantity'           => 1,
+                'nextRenewalAt'      => '2026-12-19T10:24:16+00:00',
+            ]),
+        );
+
+        (new FluentCartOrderRepository($plugin))->store(new StoreOrderData(
+            vatlyId:  'order_signup_1',
+            customerId: 'customer_1',
+            status:   'paid',
+            total:    2420,
+            currency: 'EUR',
+            testmode: false,
+            metadata: ['fluentcart_transaction_id' => '5', 'fluentcart_subscription_id' => '12'],
+            lines:    [new \Vatly\API\Types\OrderLineData(
+                vatlyId: 'orderline_1',
+                description: 'Pro plan',
+                quantity: 1,
+                basePrice: new \Vatly\API\Types\Money('EUR', '20.00'),
+                total: new \Vatly\API\Types\Money('EUR', '24.20'),
+                subtotal: new \Vatly\API\Types\Money('EUR', '20.00'),
+                productType: 'subscription_plan',
+                productId: 'subscription_plan_1',
+                relatedResources: new \Vatly\API\Types\OrderLineRelatedResources('subscription_B'),
+            )],
+        ));
+
+        self::assertSame('succeeded', $checkout->status);
+        self::assertSame('active', $subscription->status);
+        self::assertSame('subscription_B', $subscription->vendor_subscription_id);
+        self::assertSame('2026-12-19 10:24:16', $subscription->next_billing_date);
+        self::assertCount(1, \FluentCart\App\Events\Subscription\SubscriptionActivated::$dispatched);
     }
 
     public function test_a_failed_payment_never_confirms_or_records_a_payment(): void
@@ -157,6 +230,7 @@ class FluentCartOrderRepositoryTest extends TestCase
             total:          1210,
             currency:       'EUR',
             testmode:       false,
+            subtotal:       1000,
             hostCustomerId: '42',
         ));
     }

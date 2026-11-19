@@ -114,6 +114,8 @@ final class VatlyConfig implements ConfigurationInterface
     {
         $this->settings ??= (array) fluent_cart_get_option(VatlySettings::METHOD_HANDLER, []);
 
-        return $this->settings[$key] ?? null;
+        $value = $this->settings[$key] ?? null;
+
+        return in_array($key, VatlySettings::SECRET_FIELDS, true) ? VatlySettings::revealSecret($value) : $value;
     }
 }

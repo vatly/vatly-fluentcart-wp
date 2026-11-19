@@ -329,9 +329,18 @@ namespace FluentCart\App\Models {
         public array $order_items = [];
         /** @var array<string, mixed> in-memory mirror of FluentCart's order meta — phpunit-only */
         public array $meta = [];
+        public int $total_amount = 0;
+        public int $total_paid = 0;
+        public ?string $payment_status = null;
+        /** @var array<int, array{0: string, 1: string, 2: string}> phpunit-only: addLog() calls */
+        public array $logs = [];
 
         /** @return Builder<self> */
         public static function query(): Builder { return new Builder(); }
+
+        public function save(): bool { return true; }
+
+        public function addLog($title, $description = '', $type = 'info', $by = ''): void { $this->logs[] = [(string) $title, (string) $description, (string) $type]; }
 
         public function updateMeta(string $key, string $value): void { $this->meta[$key] = $value; }
 
@@ -513,6 +522,28 @@ namespace FluentCart\App\Helpers {
      * succeeded. The gateway uses it in place of the (Stripe-specific)
      * Confirmations service the plugin targeted on older FluentCart.
      */
+    /**
+     * phpunit-only stand-in for FluentCart's openssl-backed key helpers: a
+     * reversible wrapper, so tests can tell a stored value was encrypted.
+     */
+    class Helper
+    {
+        public static function encryptKey($value)
+        {
+            return ! $value || self::isValueEncrypted($value) ? $value : 'enc:' . base64_encode((string) $value);
+        }
+
+        public static function decryptKey($rawValue)
+        {
+            return self::isValueEncrypted($rawValue) ? base64_decode(substr((string) $rawValue, 4)) : $rawValue;
+        }
+
+        public static function isValueEncrypted($rawValue): bool
+        {
+            return is_string($rawValue) && str_starts_with($rawValue, 'enc:');
+        }
+    }
+
     class StatusHelper
     {
         public function __construct(mixed $order = null) {}
@@ -614,5 +645,18 @@ namespace FluentCart\Api {
         {
             return $key === 'order_mode' ? self::$orderMode : $default;
         }
+    }
+}
+
+namespace FluentCart\App\Events\Order {
+
+    class OrderPaymentFailed
+    {
+        /** @var array<int, self> phpunit-only */
+        public static array $dispatched = [];
+
+        public function __construct(public mixed $order, public mixed $transaction = null, public mixed $oldStatus = null, public mixed $newStatus = null, public mixed $reason = null) {}
+
+        public function dispatch(): void { self::$dispatched[] = $this; }
     }
 }

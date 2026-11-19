@@ -84,6 +84,12 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->confirmInitialPayment($data, (string) $metadata['fluentcart_transaction_id']);
         }
 
+        // A renewal whose line links a subscription needs nothing else: a guest
+        // checkout leaves no customer binding to route by.
+        if ($vatlyOrder !== null && LinkedSubscription::vatlySubscriptionId($vatlyOrder->lines()) !== null) {
+            return $this->recordRenewal($data, $vatlyOrder);
+        }
+
         // Guest-customer claim-back: a checkout that started without a Vatly
         // customer (or whose binding wasn't created at checkout time) leaves
         // the binding repo without a mapping, so StoreOrderData::hostCustomerId
@@ -205,6 +211,8 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
 
         (new StatusHelper($transaction->order))->syncOrderStatuses($transaction);
 
+        $this->activateCheckoutSubscription($data);
+
         // Reload so subsequent findByVatlyId hits the update branch.
         $transaction->refresh();
 
@@ -266,7 +274,9 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             [
                 'payment_method'   => 'vatly',
                 'payment_mode'     => $data->testmode ? 'test' : 'live',
-                'total'            => $data->total,
+                // The merchant's net, as on the initial order: Vatly's total
+                // includes the VAT it charged as Merchant of Record.
+                'total'            => $data->subtotal ?? $data->total,
                 'currency'         => $data->currency,
                 'vendor_charge_id' => $data->vatlyId,
             ],
@@ -290,6 +300,43 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         return $renewalTransaction
             ? new FluentCartOrder($renewalTransaction)
             : $this->orphanWrapper($data);
+    }
+
+    /**
+     * A subscription checkout's paid order names both sides: its metadata the
+     * FluentCart subscription, its line (`relatedResources.subscriptionId`)
+     * the Vatly one. Link and activate it here, because the Vatly subscription
+     * carries no checkout metadata.
+     */
+    private function activateCheckoutSubscription(StoreOrderData $data): void
+    {
+        $fluentCartSubId = (int) (($data->metadata ?? [])['fluentcart_subscription_id'] ?? 0);
+        if ($fluentCartSubId === 0) {
+            return;
+        }
+
+        // The webhook carries the lines; a payload stored before it did needs one GET.
+        $vatlySubId = LinkedSubscription::vatlySubscriptionId($data->lines)
+            ?? LinkedSubscription::vatlySubscriptionId($this->fetchVatlyOrder($data->vatlyId)?->lines() ?? []);
+        if ($vatlySubId === null) {
+            return;
+        }
+
+        $subscription = Subscription::query()->find($fluentCartSubId);
+        $linkedElsewhere = $subscription !== null
+            && ! in_array((string) $subscription->vendor_subscription_id, ['', $vatlySubId], true);
+
+        if ($subscription === null || $linkedElsewhere) {
+            error_log(sprintf(
+                '[vatly-for-fluentcart] order.paid %s: cannot link FluentCart subscription %d to %s',
+                $data->vatlyId,
+                $fluentCartSubId,
+                $vatlySubId,
+            ));
+            return;
+        }
+
+        (new FluentCartSubscriptionRepository($this->plugin))->activate($subscription, $vatlySubId, null, $data->testmode);
     }
 
     /**

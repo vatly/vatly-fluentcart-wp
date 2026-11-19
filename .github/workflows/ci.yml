@@ -276,6 +276,7 @@ jobs:
             "${SCOPED}/src/PaymentMethod/VatlyGateway.php"
 
           test -f "${SCOPED}/vendor/autoload.php"
+          test -f "${SCOPED}/uninstall.php"
 
           # Sanity-check the classmap got populated with prefixed entries.
           # The current floor (~180) is well above what we'd ever expect to

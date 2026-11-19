@@ -33,6 +33,7 @@ abstract class TestCase extends PhpUnitTestCase
 
         \FluentCart\App\Modules\Subscriptions\Services\SubscriptionService::reset();
         \FluentCart\App\Events\Subscription\SubscriptionActivated::$dispatched = [];
+        \FluentCart\App\Events\Order\OrderPaymentFailed::$dispatched = [];
 
         $this->setupCommonStubs();
     }

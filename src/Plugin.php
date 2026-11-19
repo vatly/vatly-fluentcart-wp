@@ -76,6 +76,7 @@ final class Plugin
         // and the migration's cron hook must be attached in the hook-less
         // wp-cron context where the batch runner actually fires.
         SubscriptionBillingBackfill::register();
+        WebhookCallRepository::registerPruning();
         (new Upgrader())->maybeUpgrade();
 
         (new SubscriptionController($this))->register();

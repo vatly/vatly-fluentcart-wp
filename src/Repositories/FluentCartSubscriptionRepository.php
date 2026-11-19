@@ -59,11 +59,9 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
         $fluentCartSubId   = $this->subscriptionIdFromMetadata($vatlySubscription);
 
         if ($fluentCartSubId === null) {
-            error_log(sprintf(
-                '[vatly-for-fluentcart] subscription.started %s: no fluentcart_subscription_id in Vatly metadata',
-                $data->vatlyId,
-            ));
-            return $this->orphanWrapper($data);
+            // The usual case: the initial order.paid links and activates it,
+            // whichever of the two webhooks arrives first.
+            return $this->findByVatlyId($data->vatlyId) ?? $this->orphanWrapper($data);
         }
 
         $subscription = Subscription::query()->find($fluentCartSubId);
@@ -76,16 +74,33 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
             return $this->orphanWrapper($data);
         }
 
+        return new FluentCartSubscription($this->activate($subscription, $data->vatlyId, $vatlySubscription));
+    }
+
+    /**
+     * Link a FluentCart subscription to its Vatly subscription and activate it.
+     *
+     * Vatly doesn't copy checkout metadata onto the subscription, so store()
+     * usually can't name the FluentCart row. The initial paid order can: its
+     * metadata names the FluentCart subscription and its line links the Vatly
+     * one. {@see FluentCartOrderRepository} calls this from there.
+     *
+     * @param object|null $vatlySubscription The Vatly subscription resource, when already fetched.
+     */
+    public function activate(Subscription $subscription, string $vatlySubscriptionId, ?object $vatlySubscription = null, ?bool $testmode = null): Subscription
+    {
+        $vatlySubscription ??= $this->fetchVatlySubscription($vatlySubscriptionId, $testmode);
+
         $schedule   = $this->billingScheduleFrom($vatlySubscription);
         $activating = in_array((string) $subscription->status, ['pending', 'intended'], true);
-        $args       = array_merge([
-            'vendor_subscription_id' => $data->vatlyId,
-            'vendor_customer_id'     => $data->customerId,
-            'vendor_plan_id'         => $data->planId,
-            'quantity'               => $data->quantity,
-        ], $schedule);
+        $args       = array_merge(array_filter([
+            'vendor_subscription_id' => $vatlySubscriptionId,
+            'vendor_customer_id'     => $vatlySubscription->customerId ?? null,
+            'vendor_plan_id'         => $vatlySubscription->subscriptionPlanId ?? null,
+            'quantity'               => $vatlySubscription->quantity ?? null,
+        ], fn ($v) => $v !== null), $schedule);
 
-        // Only the first subscription.started activates. A late re-delivery must
+        // Only the first activation sets the status. A late re-delivery must
         // not revive a subscription that has since been canceled or paused.
         if ($activating) {
             $trialing       = isset($schedule['trial_ends_at']) && strtotime($schedule['trial_ends_at']) > time();
@@ -100,7 +115,7 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
             (new SubscriptionActivated($subscription, $subscription->order, $subscription->customer))->dispatch();
         }
 
-        return new FluentCartSubscription($subscription);
+        return $subscription;
     }
 
     public function update(SubscriptionInterface $subscription, UpdateSubscriptionData $data): SubscriptionInterface
@@ -192,10 +207,12 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
      * `fluentcart_subscription_id` we stamped in metadata and to back-fill the
      * billing schedule onto the FluentCart row.
      */
-    private function fetchVatlySubscription(string $vatlySubscriptionId): ?object
+    private function fetchVatlySubscription(string $vatlySubscriptionId, ?bool $testmode = null): ?object
     {
         try {
-            return $this->plugin->vatly()->getSubscription()->execute($vatlySubscriptionId);
+            $vatly = $testmode === null ? $this->plugin->vatly() : $this->plugin->vatlyForTestmode($testmode);
+
+            return $vatly->getSubscription()->execute($vatlySubscriptionId);
         } catch (Throwable $e) {
             error_log('[vatly-for-fluentcart] failed to fetch Vatly subscription: ' . $e->getMessage());
             return null;

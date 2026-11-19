@@ -81,16 +81,16 @@
         },
         {
             "name": "vatly/vatly-api-php",
-            "version": "v0.1.0-alpha.34",
+            "version": "v0.1.0-alpha.35",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vatly/vatly-api-php.git",
-                "reference": "8b964265df5851f89985b41dd4d6aa616edee9d1"
+                "reference": "88ab4b5b3b169be02d97eeb32243df0419efbeb4"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/8b964265df5851f89985b41dd4d6aa616edee9d1",
-                "reference": "8b964265df5851f89985b41dd4d6aa616edee9d1",
+                "url": "https://api.github.com/repos/vatly/vatly-api-php/zipball/88ab4b5b3b169be02d97eeb32243df0419efbeb4",
+                "reference": "88ab4b5b3b169be02d97eeb32243df0419efbeb4",
                 "shasum": ""
             },
             "require": {
@@ -144,10 +144,10 @@
             ],
             "support": {
                 "issues": "https://github.com/vatly/vatly-api-php/issues",
-                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.34"
+                "source": "https://github.com/vatly/vatly-api-php/tree/v0.1.0-alpha.35"
             },
-            "time": "2026-11-14T15:48:47+00:00",
-            "published-time": "2026-11-14T15:49:40+00:00"
+            "time": "2026-11-19T10:40:22+00:00",
+            "published-time": "2026-11-19T10:40:39+00:00"
         },
         {
             "name": "vatly/vatly-fluent-php",
