@@ -37,7 +37,7 @@
         }
     },
     "scripts": {
-        "analyse": "phpstan analyse --memory-limit=512M",
+        "analyse": "phpstan analyse --memory-limit=1G",
         "phpcs": "phpcs",
         "phpcbf": "phpcbf",
         "test": "phpunit",
