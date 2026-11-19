@@ -8,6 +8,7 @@ use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use FluentCart\App\Builder;
 use FluentCart\App\Models\Subscription;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Vatly\API\Types\Money;
 use Vatly\API\Types\OrderLineData;
 use Vatly\API\Types\OrderLineRelatedResources;
@@ -94,13 +95,14 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
 
         $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
 
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
+        Actions\expectDone('fluent_cart/subscription_past_due')->once();
         Actions\expectDone('vatly_fluentcart_subscription_past_due')->once();
 
         self::assertTrue($reaction->supports($this->event(metadata: ['fluentcart_subscription_id' => 55])));
         $reaction->handle($this->event(metadata: ['fluentcart_subscription_id' => 55]));
 
         self::assertSame('past_due', $row->status, 'subscription must flip to FluentCart past_due');
+        self::assertCount(1, SubscriptionService::$synced, 'through FluentCart, so its status hooks fire');
     }
 
     public function test_flips_the_subscription_the_order_lines_link_to(): void
@@ -119,7 +121,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $bindings = \Mockery::mock(CustomerBindingRepository::class);
         $bindings->shouldNotReceive('hostCustomerIdFor');
 
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
+        Actions\expectDone('fluent_cart/subscription_past_due')->once();
 
         (new HandlePaymentFailedOnDunning($this->plugin('subscription_B'), $bindings))->handle($this->event());
 
@@ -160,7 +162,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
             relatedResources: new OrderLineRelatedResources('subscription_B'),
         );
 
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
+        Actions\expectDone('fluent_cart/subscription_past_due')->once();
 
         (new HandlePaymentFailedOnDunning($plugin, $bindings))->handle($this->event(lines: [$line]));
 
@@ -184,7 +186,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $bindings->shouldNotReceive('hostCustomerIdFor');
 
         Functions\expect('error_log')->once();
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->never();
+        Actions\expectDone('fluent_cart/subscription_past_due')->never();
 
         (new HandlePaymentFailedOnDunning($this->plugin('subscription_B'), $bindings))->handle($this->event());
 
@@ -208,7 +210,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
 
         $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
 
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->once();
+        Actions\expectDone('fluent_cart/subscription_past_due')->once();
 
         $reaction->handle($this->event());
 
@@ -231,7 +233,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
 
         $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
 
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->never();
+        Actions\expectDone('fluent_cart/subscription_past_due')->never();
         Actions\expectDone('vatly_fluentcart_subscription_past_due')->never();
 
         $reaction->handle($this->event(metadata: ['fluentcart_subscription_id' => 55]));
@@ -246,7 +248,7 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         $bindings->shouldReceive('hostCustomerIdFor')->once()->andReturn(null);
 
         Functions\expect('error_log')->once();
-        Actions\expectDone('fluent_cart/payments/subscription_past_due')->never();
+        Actions\expectDone('fluent_cart/subscription_past_due')->never();
 
         $reaction = new HandlePaymentFailedOnDunning($this->plugin(), $bindings);
         $reaction->handle($this->event());

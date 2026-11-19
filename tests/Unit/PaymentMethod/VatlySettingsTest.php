@@ -4,66 +4,51 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Tests\Unit\PaymentMethod;
 
-use Brain\Monkey\Functions;
+use FluentCart\Api\StoreSettings;
 use Vatly\FluentCart\Config\VatlyConfig;
 use Vatly\FluentCart\PaymentMethod\VatlySettings;
 use Vatly\FluentCart\Tests\TestCase;
 
 /**
- * FluentCart 2.2.0's checkout gate (PaymentMethods::getActiveMethodInstance)
- * and settings UI read `is_active` as the string 'yes'/'no'. This gateway
- * stores its settings in its own WP option with a boolean `is_active`, so
- * VatlySettings::get() must normalise to the string form on the way out —
- * otherwise the method is silently treated as inactive and never offered at
- * checkout.
+ * FluentCart saves a gateway's settings screen under its `methodHandler` in
+ * its own option store, and its checkout only offers a method whose
+ * `is_active` is 'yes'. The plugin must read the keys from that same store,
+ * or settings a merchant saves never take effect.
  *
  * @covers \Vatly\FluentCart\PaymentMethod\VatlySettings
+ * @covers \Vatly\FluentCart\Config\VatlyConfig
  */
 final class VatlySettingsTest extends TestCase
 {
-    private function withOption(array $option): void
+    public function test_settings_saved_by_fluentcart_reach_the_gateway_and_the_sdk_config(): void
     {
-        Functions\when('get_option')->alias(static function (string $key, $default = false) use ($option) {
-            return $key === VatlyConfig::OPTION_KEY ? $option : $default;
-        });
+        $GLOBALS['fluent_cart_options'][VatlySettings::METHOD_HANDLER] = [
+            'is_active'           => 'yes',
+            'test_api_key'        => 'test_key_1',
+            'test_webhook_secret' => 'whsec_test',
+            'live_api_key'        => 'live_key_1',
+            'live_webhook_secret' => 'whsec_live',
+        ];
+
+        self::assertTrue((new VatlySettings())->isActive());
+
+        $config = new VatlyConfig();
+        self::assertTrue($config->isEnabled());
+        self::assertSame('test_key_1', $config->getApiKey());
+        self::assertSame('whsec_test', $config->getWebhookSecret());
     }
 
-    public function test_boolean_true_is_active_normalises_to_yes(): void
+    public function test_unsaved_settings_leave_the_gateway_inactive(): void
     {
-        $this->withOption(['is_active' => true, 'payment_mode' => 'live']);
-
-        $settings = new VatlySettings();
-
-        self::assertSame('yes', $settings->get('is_active'));
-        self::assertTrue($settings->isActive());
+        self::assertFalse((new VatlySettings())->isActive());
+        self::assertNull((new VatlyConfig())->getWebhookSecret());
     }
 
-    public function test_missing_or_falsey_is_active_normalises_to_no(): void
+    public function test_mode_follows_the_store_order_mode(): void
     {
-        $this->withOption(['payment_mode' => 'test']);
-
-        $settings = new VatlySettings();
-
-        self::assertSame('no', $settings->get('is_active'));
-        self::assertFalse($settings->isActive());
-    }
-
-    public function test_get_with_no_key_returns_the_whole_normalised_array(): void
-    {
-        $this->withOption(['is_active' => false, 'payment_mode' => 'live']);
-
-        $all = (new VatlySettings())->get();
-
-        self::assertSame('no', $all['is_active']);
-        self::assertSame('live', $all['payment_mode']);
-    }
-
-    public function test_get_mode_returns_stored_mode_and_defaults_to_test(): void
-    {
-        $this->withOption(['payment_mode' => 'live']);
-        self::assertSame('live', (new VatlySettings())->getMode());
-
-        $this->withOption([]);
         self::assertSame('test', (new VatlySettings())->getMode());
+
+        StoreSettings::$orderMode = 'live';
+        self::assertSame('live', (new VatlySettings())->getMode());
     }
 }

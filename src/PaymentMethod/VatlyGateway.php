@@ -21,11 +21,12 @@ use Vatly\FluentCart\Webhook\IPN;
 final class VatlyGateway extends AbstractPaymentGateway
 {
     /** @var array<int, string> */
-    public array $supportedFeatures = ['payment', 'webhook', 'refund', 'subscriptions'];
+    public array $supportedFeatures = ['payment', 'webhook', 'refund'];
 
     public function __construct(private Plugin $plugin)
     {
-        parent::__construct(new VatlySettings());
+        // Passing the subscription module adds the `subscriptions` feature.
+        parent::__construct(new VatlySettings(), new VatlySubscriptions($plugin));
 
         add_action('wp_ajax_fluent_cart_vatly_webhook', [$this, 'handleIPN']);
         add_action('wp_ajax_nopriv_fluent_cart_vatly_webhook', [$this, 'handleIPN']);
@@ -41,12 +42,7 @@ final class VatlyGateway extends AbstractPaymentGateway
      * AbstractPaymentGateway::__construct as `$this->methodSlug`, which keys the
      * `fluent_cart/transaction/url_<slug>` filters) and `route` (the
      * payment-listener / order-status routing key) both resolve to the gateway
-     * slug. verified: FluentCart free 2.2.0 —
-     * GatewayManager.php:156-183 (required keys enforced by getAllMeta()) and
-     * AbstractPaymentGateway.php (`$this->methodSlug = $this->getMeta('slug')`).
-     * `status` is the enabled flag; we read it from VatlyConfig (same option/key
-     * FluentCart's own `settings->get('is_active')` reads) so it stays correct
-     * without depending on the base settings property.
+     * slug. `status` is the enabled flag from the saved settings.
      *
      * @return array<string, mixed>
      */
@@ -65,7 +61,7 @@ final class VatlyGateway extends AbstractPaymentGateway
             'icon'               => $logo,
             'brand_color'        => '#0B5FFF',
             'upcoming'           => false,
-            'status'             => $this->plugin->config()->isEnabled(),
+            'status'             => $this->settings->isActive(),
             'supported_features' => $this->supportedFeatures,
         ];
     }
@@ -104,25 +100,47 @@ final class VatlyGateway extends AbstractPaymentGateway
     }
 
     /**
-     * Whether the gateway is enabled for checkout.
+     * Settings fields for FluentCart's gateway screen. FluentCart saves them
+     * under {@see VatlySettings::METHOD_HANDLER}. Test or live follows the
+     * store mode, so both key pairs are always shown.
      *
-     * FluentCart's AbstractPaymentGateway::isEnabled() checks
-     * `settings->get('is_active') === 'yes'`, but our settings are stored in our
-     * own option (see {@see VatlyConfig}) with a boolean `is_active`, not the
-     * FluentCart `'yes'`/`'no'` string. Override so GatewayManager::enabled()
-     * reflects our own enabled flag.
-     */
-    public function isEnabled(): bool
-    {
-        return $this->plugin->config()->isEnabled();
-    }
-
-    /**
-     * @return array<string, mixed>
+     * @return array<string, array<string, mixed>>
      */
     public function fields(): array
     {
-        return (new VatlySettings())->fields();
+        return [
+            'notice' => [
+                'value' => $this->renderStoreModeNotice(),
+                'label' => __('Store mode', 'vatly-for-fluentcart'),
+                'type'  => 'notice',
+            ],
+            'test_api_key' => [
+                'value' => '',
+                'label' => __('Test API key', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'test_webhook_secret' => [
+                'value' => '',
+                'label' => __('Test webhook secret', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'live_api_key' => [
+                'value' => '',
+                'label' => __('Live API key', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'live_webhook_secret' => [
+                'value' => '',
+                'label' => __('Live webhook secret', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'webhook_info' => [
+                'value' => '<p>' . esc_html__('Add this URL as a webhook endpoint in your Vatly dashboard:', 'vatly-for-fluentcart')
+                    . '</p><code>' . esc_html($this->plugin->config()->webhookUrl()) . '</code>',
+                'label' => __('Webhook URL', 'vatly-for-fluentcart'),
+                'type'  => 'html_attr',
+            ],
+        ];
     }
 
     /**

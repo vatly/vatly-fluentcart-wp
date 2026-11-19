@@ -31,6 +31,18 @@ namespace {
         function fluent_cart_api(): object { return new \stdClass(); }
     }
 
+    if (! function_exists('fluent_cart_get_option')) {
+        /**
+         * phpunit-only: options staged in $GLOBALS['fluent_cart_options'].
+         *
+         * @return mixed
+         */
+        function fluent_cart_get_option(string $metaKey, mixed $default = false, bool $cache = true)
+        {
+            return $GLOBALS['fluent_cart_options'][$metaKey] ?? $default;
+        }
+    }
+
     // Belt-and-braces safety: if the real FluentCart plugin is already loaded
     // (e.g. a future integration bootstrap forgot to skip this file), bail
     // out before redeclaring any of the namespaced classes below. The header
@@ -211,7 +223,24 @@ namespace FluentCart\App\Modules\PaymentMethods\Core {
         /** @var array<int, string> */
         public array $supportedFeatures = [];
 
-        public function __construct(mixed ...$args) {}
+        /** @var BaseGatewaySettings */
+        public $settings;
+
+        /** @var AbstractSubscriptionModule|null */
+        public $subscriptions;
+
+        /**
+         * Same signature as FluentCart: passing a subscription module adds the
+         * `subscriptions` feature.
+         */
+        public function __construct(BaseGatewaySettings $settings, ?AbstractSubscriptionModule $subscriptions = null)
+        {
+            $this->settings = $settings;
+            if ($subscriptions) {
+                $this->supportedFeatures[] = 'subscriptions';
+            }
+            $this->subscriptions = $subscriptions;
+        }
 
         /** @return array<string, mixed> */
         abstract public function meta(): array;
@@ -229,6 +258,11 @@ namespace FluentCart\App\Modules\PaymentMethods\Core {
         {
             return false;
         }
+
+        public function renderStoreModeNotice(): string
+        {
+            return '';
+        }
     }
 
     /**
@@ -237,14 +271,26 @@ namespace FluentCart\App\Modules\PaymentMethods\Core {
      * table; the stub ctor is a no-op so settings classes instantiate without a
      * database.)
      */
+    /**
+     * FluentCart's settings base: loads the saved settings for $methodHandler
+     * from FluentCart's option store, over the subclass defaults.
+     */
     abstract class BaseGatewaySettings
     {
-        // Untyped, exactly as FluentCart declares them, so a subclass may give
-        // $methodHandler its own (string) default without a variance error.
-        public $methodHandler;
+        /** @var array<string, mixed> */
         public $settings;
 
-        public function __construct() {}
+        /** @var string */
+        public $methodHandler;
+
+        public function __construct()
+        {
+            $saved = fluent_cart_get_option((string) $this->methodHandler, []);
+            $this->settings = array_merge(static::getDefaults(), is_array($saved) ? $saved : []);
+        }
+
+        /** @return array<string, mixed> */
+        public static function getDefaults() { return []; }
 
         /** @return mixed */
         abstract public function get($key = '');
@@ -254,6 +300,15 @@ namespace FluentCart\App\Modules\PaymentMethods\Core {
 
         /** @return mixed */
         abstract public function isActive();
+    }
+
+    abstract class AbstractSubscriptionModule
+    {
+        /** @return mixed */
+        public function cancel($vendorSubscriptionId, $args = [])
+        {
+            return new \WP_Error('not_implemented', 'Cancel subscription is not implemented for this payment method.');
+        }
     }
 
     /**
@@ -309,7 +364,16 @@ namespace FluentCart\App\Models {
         public static function query(): Builder { return new Builder(); }
 
         /** @param array<string, mixed> $attrs */
-        public function fill(array $attrs): self { return $this; }
+        public function fill(array $attrs): self
+        {
+            foreach ($attrs as $key => $value) {
+                if (property_exists($this, $key)) {
+                    $this->{$key} = $value;
+                }
+            }
+
+            return $this;
+        }
 
         public function save(): bool { return true; }
 
@@ -343,9 +407,12 @@ namespace FluentCart\App\Models {
         public ?int $trial_days = null;
         public ?string $trial_ends_at = null;
         public ?object $customer = null;
+        public ?object $order = null;
 
         /** @return Builder<self> */
         public static function query(): Builder { return new Builder(); }
+
+        public function guessNextBillingDate($forced = false): string { return '2099-01-01 00:00:00'; }
 
         /**
          * Eloquent-style mass assignment. The stub applies the attributes to
@@ -482,7 +549,70 @@ namespace FluentCart\App\Modules\Subscriptions\Services {
         {
             self::$lastRecorded = [$subscriptionModel, $transactionData, $subscriptionUpdateArgs];
 
+            if ($subscriptionModel !== null) {
+                self::syncSubscriptionStates($subscriptionModel, $subscriptionUpdateArgs);
+            }
+
             return null;
+        }
+
+        /**
+         * phpunit-only: every sync, as [$subscriptionModel, $args, $oldStatus].
+         *
+         * @var array<int, array{0: Subscription, 1: array<string, mixed>, 2: ?string}>
+         */
+        public static array $synced = [];
+
+        /**
+         * Applies the args like FluentCart does (fill + save) and records the call
+         * so tests can see that a status change went through FluentCart.
+         *
+         * @param array<string, mixed> $subscriptionUpdateArgs
+         */
+        public static function syncSubscriptionStates(Subscription $subscriptionModel, $subscriptionUpdateArgs = [], $expectedStatus = null)
+        {
+            self::$synced[] = [$subscriptionModel, $subscriptionUpdateArgs, $subscriptionModel->status];
+            $subscriptionModel->fill($subscriptionUpdateArgs)->save();
+
+            return $subscriptionModel;
+        }
+
+        public static function reset(): void
+        {
+            self::$lastRecorded = null;
+            self::$synced = [];
+        }
+    }
+}
+
+namespace FluentCart\App\Events\Subscription {
+
+    class SubscriptionActivated
+    {
+        /** @var array<int, self> phpunit-only */
+        public static array $dispatched = [];
+
+        public function __construct(public mixed $subscription, public mixed $order = null, public mixed $customer = null) {}
+
+        public function dispatch(): void { self::$dispatched[] = $this; }
+    }
+}
+
+namespace FluentCart\Api {
+
+    class StoreSettings
+    {
+        /** @var string phpunit-only: the store's order mode */
+        public static string $orderMode = 'test';
+
+        /**
+         * @param string|null $key
+         * @param mixed       $default
+         * @return mixed
+         */
+        public function get($key = null, $default = null)
+        {
+            return $key === 'order_mode' ? self::$orderMode : $default;
         }
     }
 }

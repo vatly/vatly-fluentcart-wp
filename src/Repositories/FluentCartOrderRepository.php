@@ -10,6 +10,7 @@ use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
 use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
+use Vatly\API\Types\OrderStatus;
 use Vatly\API\Resources\Order;
 use Vatly\Fluent\Contracts\OrderInterface;
 use Vatly\Fluent\Contracts\OrderRepositoryInterface;
@@ -52,6 +53,13 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
 
     public function store(StoreOrderData $data): OrderInterface
     {
+        // store() runs for order.payment_failed too, when the failed order has
+        // no local row yet. Only a paid order may confirm a checkout or record a
+        // renewal; anything else is left for the order.paid that may follow.
+        if ($data->status !== OrderStatus::STATUS_PAID) {
+            return $this->orphanWrapper($data);
+        }
+
         // Prefer the Vatly order metadata that vatly-fluent-php already decoded
         // from the signed order.paid webhook payload and handed us on
         // StoreOrderData: when it already names the FluentCart transaction, the
@@ -130,28 +138,13 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
 
         $transaction = $order->transaction;
 
-        // Most Vatly statuses are NOT propagated here: the built-in
-        // StoreOrderOnPaid reaction calls update() with `paid` on every
-        // re-delivery, but FluentCart's local enum uses `succeeded` (set by
-        // Confirmations::confirmPaymentSuccessByCharge during store()).
-        // Writing back `paid` would push the transaction out of FluentCart's
-        // documented state.
-        //
-        // The exception is `canceled` (fired by alpha.7's CancelOrderOnCanceled
-        // reaction): this is a real state transition only Vatly knows about,
-        // so it does need to flow through.
-        $dirty = array_filter([
-            'total'          => $data->total,
-            'currency'       => $data->currency,
-            'invoice_number' => $data->invoiceNumber,
-        ], fn ($v) => $v !== null);
-
-        if ($data->status === 'canceled') {
-            $dirty['status'] = 'canceled';
-        }
-
-        if ($dirty !== []) {
-            $transaction->fill($dirty)->save();
+        // Only `canceled` flows back (CancelOrderOnCanceled): it's a real state
+        // change only Vatly knows about. Other statuses use Vatly's names, not
+        // FluentCart's, and the amounts stay FluentCart's: Vatly's total is the
+        // gross the customer paid Vatly as Merchant of Record (see
+        // confirmInitialPayment), and `invoice_number` isn't a transaction column.
+        if ($data->status === 'canceled' && $transaction->status !== 'canceled') {
+            $transaction->fill(['status' => 'canceled'])->save();
         }
 
         return $order;
@@ -255,16 +248,21 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->orphanWrapper($data);
         }
 
-        // FluentCart 2.2.0 relocated renewal recording to the Subscriptions
-        // module's SubscriptionService and reordered the arguments: the
-        // transaction-data array is now first and the subscription second. The
-        // service creates the renewal child order + OrderTransaction (already
-        // succeeded) and advances the next billing date. We pass `total` (the
-        // old `amount` key no longer applies) and freeze the record's mode from
-        // the webhook payload. `invoice_number`/`status` are omitted: the
-        // service sets the transaction status itself, and invoice_number is not
-        // an OrderTransaction column.
-        SubscriptionService::recordRenewalPayment(
+        // SubscriptionService::recordRenewalPayment creates the renewal order and
+        // its succeeded transaction, then runs syncSubscriptionStates with the
+        // update args. That sync only moves `next_billing_date` when it's passed
+        // in, and FluentCart's hourly job expires an active subscription once
+        // that date plus the grace period is behind it. So pass Vatly's next
+        // renewal date, and `active` so a renewal during dunning recovers the
+        // subscription through FluentCart's own status change (and its hooks).
+        // FluentCart skips a renewal whose vendor_charge_id it already recorded.
+        $updateArgs = ['status' => 'active'];
+        $nextRenewal = $this->nextRenewalDateOf((string) $subscription->vendor_subscription_id, $data->testmode);
+        if ($nextRenewal !== null) {
+            $updateArgs['next_billing_date'] = $nextRenewal;
+        }
+
+        $recorded = SubscriptionService::recordRenewalPayment(
             [
                 'payment_method'   => 'vatly',
                 'payment_mode'     => $data->testmode ? 'test' : 'live',
@@ -273,18 +271,16 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
                 'vendor_charge_id' => $data->vatlyId,
             ],
             $subscription,
-            []
+            $updateArgs
         );
 
-        // Symmetric counterpart to HandlePaymentFailedOnDunning: the gateway
-        // owns active → failing on order.payment_failed, so it also owns
-        // failing → active on a successful retry. FluentCart's
-        // recordRenewalPayment records the transaction and advances the next
-        // billing date, but it doesn't have the signal to know this renewal
-        // is *recovering* dunning — only the gateway does.
-        $subscription->refresh();
-        if (in_array($subscription->status, ['failing', 'past_due'], true)) {
-            $subscription->fill(['status' => 'active'])->save();
+        if ($nextRenewal === null && ! is_wp_error($recorded)) {
+            // Vatly's date was unavailable: derive it from the renewal just
+            // recorded, the way FluentCart does, so the subscription can't expire.
+            $subscription->refresh();
+            SubscriptionService::syncSubscriptionStates($subscription, [
+                'next_billing_date' => $subscription->guessNextBillingDate(true),
+            ]);
         }
 
         $renewalTransaction = OrderTransaction::query()
@@ -294,6 +290,27 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         return $renewalTransaction
             ? new FluentCartOrder($renewalTransaction)
             : $this->orphanWrapper($data);
+    }
+
+    /**
+     * Vatly's next renewal date for a subscription, in FluentCart's datetime
+     * format, or null when it can't be read.
+     */
+    private function nextRenewalDateOf(string $vatlySubscriptionId, bool $testmode): ?string
+    {
+        if ($vatlySubscriptionId === '') {
+            return null;
+        }
+
+        try {
+            $vatlySubscription = $this->plugin->vatlyForTestmode($testmode)->getSubscription()->execute($vatlySubscriptionId);
+            $next = $vatlySubscription->nextRenewalAt ?? null;
+
+            return $next ? gmdate('Y-m-d H:i:s', (int) strtotime((string) $next)) : null;
+        } catch (Throwable $e) {
+            error_log('[vatly-for-fluentcart] failed to read the next renewal date: ' . $e->getMessage());
+            return null;
+        }
     }
 
     private function fetchVatlyOrder(string $vatlyOrderId): ?Order

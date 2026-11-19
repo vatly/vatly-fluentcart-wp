@@ -27,6 +27,13 @@ abstract class TestCase extends PhpUnitTestCase
             $GLOBALS['wpdb']->reset();
         }
 
+        // FluentCart's own option store and store mode, staged per test.
+        $GLOBALS['fluent_cart_options'] = [];
+        \FluentCart\Api\StoreSettings::$orderMode = 'test';
+
+        \FluentCart\App\Modules\Subscriptions\Services\SubscriptionService::reset();
+        \FluentCart\App\Events\Subscription\SubscriptionActivated::$dispatched = [];
+
         $this->setupCommonStubs();
     }
 
@@ -104,13 +111,42 @@ abstract class TestCase extends PhpUnitTestCase
      * answer `getOrder()->execute()` with the given order. The constructor is
      * bypassed because Plugin is final and boots WordPress hooks.
      */
-    protected function pluginReturningOrder(Order $order): Plugin
+    /**
+     * A Vatly subscription resource as the API returns it.
+     *
+     * @param array<string, mixed> $fields
+     */
+    protected function vatlySubscription(string $id, array $fields = []): \Vatly\API\Resources\Subscription
+    {
+        $payload = json_decode((string) json_encode(array_merge([
+            'id'       => $id,
+            'resource' => 'subscription',
+            'testmode' => false,
+            'metadata' => (object) [],
+        ], $fields)));
+
+        $subscription = ResourceFactory::createResourceFromApiResult(
+            $payload,
+            new \Vatly\API\Resources\Subscription(Mockery::mock(VatlyApiClient::class)),
+        );
+        \assert($subscription instanceof \Vatly\API\Resources\Subscription);
+
+        return $subscription;
+    }
+
+    protected function pluginReturningOrder(Order $order, ?\Vatly\API\Resources\Subscription $subscription = null): Plugin
     {
         $getOrder = Mockery::mock(GetOrder::class);
         $getOrder->shouldReceive('execute')->with($order->id)->andReturn($order);
 
         $vatly = Mockery::mock(Vatly::class);
         $vatly->shouldReceive('getOrder')->andReturn($getOrder);
+
+        if ($subscription !== null) {
+            $getSubscription = Mockery::mock(\Vatly\Fluent\Actions\GetSubscription::class);
+            $getSubscription->shouldReceive('execute')->with($subscription->id)->andReturn($subscription);
+            $vatly->shouldReceive('getSubscription')->andReturn($getSubscription);
+        }
 
         $ref    = new \ReflectionClass(Plugin::class);
         $plugin = $ref->newInstanceWithoutConstructor();

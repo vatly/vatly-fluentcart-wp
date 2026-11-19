@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\Webhook\Reactions;
 
 use FluentCart\App\Models\Subscription;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
@@ -15,8 +16,9 @@ use Vatly\FluentCart\Support\LinkedSubscription;
 /**
  * On Vatly `order.payment_failed` (typically the start of dunning): mark the
  * affected FluentCart subscription as `past_due` — FluentCart's canonical
- * failed-renewal / dunning status — so FluentCart's own dunning UI and the
- * `fluent_cart/payments/subscription_past_due` notification flow take over.
+ * failed-renewal / dunning status — through FluentCart's own state sync, so
+ * its status hooks fire, and fire `fluent_cart/subscription_past_due` so its
+ * past-due emails go out.
  *
  * Resolution preference, in order:
  *   1. `metadata.fluentcart_subscription_id` if we stamped it at checkout
@@ -41,12 +43,7 @@ use Vatly\FluentCart\Support\LinkedSubscription;
 final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
 {
     /**
-     * FluentCart's failed-renewal / dunning subscription status. The native
-     * `fluent_cart/payments/subscription_past_due` action is fired off this
-     * transition so the merchant's notification + email flows run — FluentCart
-     * doesn't observe a raw `->fill(['status' => ...])->save()`, so we fire it
-     * explicitly (same pattern the plugin relies on for
-     * `fluent_cart/payments/subscription_canceled`).
+     * FluentCart's failed-renewal / dunning subscription status.
      */
     public const PAST_DUE_STATUS = 'past_due';
 
@@ -90,17 +87,23 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
             true,
         );
 
-        $subscription->fill(['status' => self::PAST_DUE_STATUS])->save();
-
-        if (! $alreadyDunning) {
-            // FluentCart fires its own status-transition notifications when its
-            // native status setter runs; we bypass that via fill()->save(), so
-            // mirror the native hook ourselves so dunning emails / merchant
-            // listeners run. Passes the subscription + the originating Vatly
-            // event for context.
-            do_action('fluent_cart/payments/subscription_past_due', $subscription, $event);
-            do_action('vatly_fluentcart_subscription_past_due', $subscription, $event);
+        if ($alreadyDunning) {
+            return;
         }
+
+        // FluentCart's own state sync fires its status hooks
+        // (`fluent_cart/payments/subscription_past_due`, status_changed).
+        $subscription = SubscriptionService::syncSubscriptionStates($subscription, [
+            'status' => self::PAST_DUE_STATUS,
+        ]) ?? $subscription;
+
+        // FluentCart's past-due emails listen on this hook, with this payload.
+        do_action('fluent_cart/subscription_past_due', [
+            'subscription' => $subscription,
+            'order'        => $subscription->order,
+            'customer'     => $subscription->customer,
+        ]);
+        do_action('vatly_fluentcart_subscription_past_due', $subscription, $event);
     }
 
     private function resolveSubscription(OrderPaymentFailed $event): ?Subscription

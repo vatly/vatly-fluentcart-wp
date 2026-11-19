@@ -4,19 +4,21 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Config;
 
+use FluentCart\Api\StoreSettings;
 use Vatly\Fluent\Contracts\ConfigurationInterface;
+use Vatly\FluentCart\PaymentMethod\VatlySettings;
 
 /**
- * Reads gateway settings persisted by FluentCart's settings UI and exposes them
- * through the framework-agnostic ConfigurationInterface used by vatly-fluent-php.
+ * Reads the gateway settings FluentCart's settings screen saved (see
+ * {@see VatlySettings}) and exposes them through the framework-agnostic
+ * ConfigurationInterface used by vatly-fluent-php.
  *
- * Implements `isTestmode()` explicitly (rather than via DerivesTestmodeFromApiKey)
- * because the gateway settings UI exposes a test/live mode toggle that some
- * merchants prefer to flip independently of the key prefix during onboarding.
+ * Test or live follows FluentCart's store mode, like FluentCart's built-in
+ * gateways, so new checkouts use the key for the mode FluentCart stamps on the
+ * order. {@see self::withTestmode()} pins a mode for existing records.
  */
 final class VatlyConfig implements ConfigurationInterface
 {
-    public const OPTION_KEY = 'fluent_cart_vatly_settings';
 
     /** @var array<string, mixed>|null */
     private ?array $settings = null;
@@ -73,7 +75,7 @@ final class VatlyConfig implements ConfigurationInterface
             return $this->testmodeOverride;
         }
 
-        return ($this->get('payment_mode') ?: 'test') === 'test';
+        return (new StoreSettings())->get('order_mode') !== 'live';
     }
 
     public function getDefaultRedirectUrlSuccess(): string
@@ -102,7 +104,7 @@ final class VatlyConfig implements ConfigurationInterface
 
     public function isEnabled(): bool
     {
-        return (bool) ($this->get('is_active') ?? false);
+        return $this->get('is_active') === 'yes';
     }
 
     /**
@@ -110,7 +112,7 @@ final class VatlyConfig implements ConfigurationInterface
      */
     private function get(string $key)
     {
-        $this->settings ??= (array) get_option(self::OPTION_KEY, []);
+        $this->settings ??= (array) fluent_cart_get_option(VatlySettings::METHOD_HANDLER, []);
 
         return $this->settings[$key] ?? null;
     }

@@ -4,37 +4,41 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Tests\Unit\Config;
 
-use Brain\Monkey\Functions;
+use FluentCart\Api\StoreSettings;
 use Vatly\FluentCart\Config\VatlyConfig;
+use Vatly\FluentCart\PaymentMethod\VatlySettings;
 use Vatly\FluentCart\Tests\TestCase;
 
 final class VatlyConfigTest extends TestCase
 {
-    public function test_with_testmode_pins_the_mode_and_selects_the_matching_key(): void
+    public function test_reads_fluentcart_saved_settings_and_follows_store_mode(): void
     {
-        Functions\when('get_option')->justReturn([
-            'payment_mode' => 'live',
-            'test_api_key' => 'sk_test_123',
-            'live_api_key' => 'sk_live_456',
-        ]);
+        $GLOBALS['fluent_cart_options'][VatlySettings::METHOD_HANDLER] = [
+            'is_active'    => 'yes',
+            'test_api_key' => 'test_123',
+            'live_api_key' => 'live_456',
+        ];
+        StoreSettings::$orderMode = 'live';
 
         $config = new VatlyConfig();
 
-        // Settings say live → live key.
+        self::assertTrue($config->isEnabled());
         self::assertFalse($config->isTestmode());
-        self::assertSame('sk_live_456', $config->getApiKey());
+        self::assertSame('live_456', $config->getApiKey());
 
-        // Pinned to test mode → test key, regardless of the settings toggle.
+        // Pinned to test mode: test key, whatever the store mode.
         $pinnedTest = $config->withTestmode(true);
         self::assertTrue($pinnedTest->isTestmode());
-        self::assertSame('sk_test_123', $pinnedTest->getApiKey());
+        self::assertSame('test_123', $pinnedTest->getApiKey());
 
-        // Pinned to live mode → live key.
-        $pinnedLive = $config->withTestmode(false);
-        self::assertFalse($pinnedLive->isTestmode());
-        self::assertSame('sk_live_456', $pinnedLive->getApiKey());
-
-        // Original instance is untouched — withTestmode() is immutable.
+        // withTestmode() is immutable.
         self::assertFalse($config->isTestmode());
+    }
+
+    public function test_is_disabled_unless_fluentcart_saved_is_active_yes(): void
+    {
+        $GLOBALS['fluent_cart_options'][VatlySettings::METHOD_HANDLER] = ['is_active' => 'no'];
+
+        self::assertFalse((new VatlyConfig())->isEnabled());
     }
 }
