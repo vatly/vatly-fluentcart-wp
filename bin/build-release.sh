@@ -47,6 +47,7 @@ echo "==> Staging plugin source"
 # out of the release zip (docker/, tests/, .github/, bin/, dotfiles, ...).
 rsync -a \
 	--include="vatly-for-fluentcart.php" \
+	--include="uninstall.php" \
 	--include="composer.json" \
 	--include="README.md" \
 	--include="src/***" \
@@ -73,9 +74,10 @@ mkdir -p "${SCOPED_DIR}"
 	--force \
 	--no-interaction )
 
-# Copy assets that php-scoper doesn't process (composer.json, README, the
-# SVG logo, …).
+# Copy files that php-scoper doesn't process (composer.json, README, the
+# SVG logo, uninstall.php, which has no namespaces to scope, …).
 rsync -a \
+	--include="uninstall.php" \
 	--include="composer.json" \
 	--include="README.md" \
 	--include="assets/***" \

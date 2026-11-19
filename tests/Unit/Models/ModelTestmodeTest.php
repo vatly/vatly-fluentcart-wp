@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\Tests\Unit\Models;
 
 use FluentCart\App\Models\OrderTransaction;
-use FluentCart\App\Models\Refund;
 use FluentCart\App\Models\Subscription;
 use Vatly\FluentCart\Models\FluentCartOrder;
 use Vatly\FluentCart\Models\FluentCartRefund;
@@ -31,11 +30,11 @@ final class ModelTestmodeTest extends TestCase
 
     public function test_refund_is_testmode_reads_refund_payment_mode(): void
     {
-        $test = new Refund();
+        $test = new OrderTransaction();
         $test->payment_mode = 'test';
         self::assertTrue((new FluentCartRefund($test))->isTestmode());
 
-        $live = new Refund();
+        $live = new OrderTransaction();
         $live->payment_mode = 'live';
         self::assertFalse((new FluentCartRefund($live))->isTestmode());
     }

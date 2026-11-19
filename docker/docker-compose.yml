@@ -79,6 +79,12 @@ services:
       # The mock POSTs webhooks to this URL after the hosted-checkout "pay"
       # button. Defaults to admin-ajax inside the docker network.
       VATLY_WEBHOOK_URL: "http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook"
+      # The mock delivers webhooks synchronously during the hosted-checkout
+      # "pay" request, and the gateway's webhook handler calls back into the
+      # mock (e.g. GET /orders/{id}) while that request is still open. A
+      # single-worker `php -S` would deadlock on that re-entrant call, so run
+      # several workers. (Real Vatly delivers webhooks out of band.)
+      PHP_CLI_SERVER_WORKERS: "5"
     ports:
       - "8081:8080"
 

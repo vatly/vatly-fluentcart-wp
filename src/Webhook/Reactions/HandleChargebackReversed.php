@@ -6,11 +6,13 @@ namespace Vatly\FluentCart\Webhook\Reactions;
 
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\OrderChargebackReversed;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\Support\ChargebackBooking;
 use Vatly\FluentCart\Support\LinkedSubscription;
 
 /**
@@ -43,6 +45,10 @@ final class HandleChargebackReversed implements WebhookReactionInterface
             return;
         }
 
+        // Restore the order first, so subscription listeners already see
+        // the order paid again.
+        ChargebackBooking::reverse($event->originalOrderId, $event->chargebackId);
+
         $subscription = $this->resolveSubscription($event->originalOrderId);
 
         if ($subscription !== null && ($subscription->status ?? null) === 'paused') {
@@ -61,7 +67,8 @@ final class HandleChargebackReversed implements WebhookReactionInterface
             $priorStatus = (string) ($subscription->getMeta(HandleChargebackReceived::PRE_CHARGEBACK_STATUS_META, '') ?? '');
             $restoreTo = $priorStatus !== '' ? $priorStatus : 'active';
 
-            $subscription->fill(['status' => $restoreTo])->save();
+            // FluentCart's own state sync fires its resume hooks.
+            $subscription = SubscriptionService::syncSubscriptionStates($subscription, ['status' => $restoreTo]) ?? $subscription;
             $subscription->updateMeta(HandleChargebackReceived::PRE_CHARGEBACK_STATUS_META, '');
         }
 
@@ -124,7 +131,7 @@ final class HandleChargebackReversed implements WebhookReactionInterface
         // restored it manually.
         return Subscription::query()
             ->where('customer_id', (int) $hostCustomerId)
-            ->where('payment_method', 'vatly')
+            ->where('current_payment_method', 'vatly')
             ->whereIn('status', ['paused', 'active'])
             ->orderByDesc('id')
             ->first();

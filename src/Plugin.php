@@ -10,7 +10,6 @@ use Vatly\Fluent\Wiring;
 use Vatly\FluentCart\Admin\ProductMetaBox;
 use Vatly\FluentCart\Config\VatlyConfig;
 use Vatly\FluentCart\Customer\FluentCartCustomerBindings;
-use Vatly\FluentCart\PaymentMethod\SubscriptionService;
 use Vatly\FluentCart\PaymentMethod\VatlyGateway;
 use Vatly\FluentCart\Repositories\FluentCartOrderRepository;
 use Vatly\FluentCart\Repositories\FluentCartRefundRepository;
@@ -18,6 +17,8 @@ use Vatly\FluentCart\Repositories\FluentCartSubscriptionRepository;
 use Vatly\FluentCart\Rest\SubscriptionController;
 use Vatly\FluentCart\Support\InvoiceShortcodes;
 use Vatly\FluentCart\Support\MoRInvoiceGuard;
+use Vatly\FluentCart\Support\SubscriptionBillingBackfill;
+use Vatly\FluentCart\Support\Upgrader;
 use Vatly\FluentCart\Webhook\EventDispatcher;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReceived;
 use Vatly\FluentCart\Webhook\Reactions\HandleChargebackReversed;
@@ -69,7 +70,14 @@ final class Plugin
         $this->booted = true;
 
         add_action('fluent_cart/register_payment_methods', [$this, 'registerGateway']);
-        add_action('fluent_cart/payments/subscription_canceled', [$this, 'propagateCancellation'], 10, 1);
+
+        // Schema upgrades + their background data migrations. Wired on every
+        // request (not admin-only): the version gate early-returns once stamped,
+        // and the migration's cron hook must be attached in the hook-less
+        // wp-cron context where the batch runner actually fires.
+        SubscriptionBillingBackfill::register();
+        WebhookCallRepository::registerPruning();
+        (new Upgrader())->maybeUpgrade();
 
         (new SubscriptionController($this))->register();
 
@@ -138,36 +146,6 @@ final class Plugin
         );
     }
 
-    /**
-     * FluentCart admin -> Vatly: propagate merchant-initiated cancellations.
-     *
-     * FluentCart's `fluent_cart/payments/subscription_canceled` hook passes a
-     * data array containing the subscription, order, customer models plus
-     * old_status / new_status — not a bare Subscription model.
-     *
-     * The same hook also fires when fluent's built-in CancelSubscriptionOnCanceled
-     * reaction (driven by an inbound subscription.canceled_* webhook) flips
-     * status to "canceled" through our FluentCartSubscriptionRepository::update.
-     * To avoid a Vatly→FluentCart→Vatly cancellation loop, the repository sets
-     * {@see FluentCartSubscriptionRepository::$suppressOutboundCancel} for the
-     * duration of its save, and this listener short-circuits when the flag is set.
-     *
-     * @param array<string, mixed> $data
-     */
-    public function propagateCancellation(array $data): void
-    {
-        if (FluentCartSubscriptionRepository::$suppressOutboundCancel) {
-            return;
-        }
-
-        $subscription = $data['subscription'] ?? null;
-        if (! is_object($subscription) || ($subscription->payment_method ?? null) !== 'vatly') {
-            return;
-        }
-
-        (new SubscriptionService($this))->cancel($subscription);
-    }
-
     public function config(): VatlyConfig
     {
         return $this->config ??= new VatlyConfig();
@@ -210,12 +188,11 @@ final class Plugin
                 // FluentCart order so receipts can link to it. Runs after the
                 // built-in StoreOrderOnPaid that owns the FluentCart-side
                 // transaction confirmation.
-                new StampVatlyInvoiceOnPaid($this),
+                new StampVatlyInvoiceOnPaid(),
                 // MoR polish (refund side): stamp Vatly's credit note URL
-                // onto the FluentCart refund row. The credit note is the
-                // customerInvoice of the credit order Vatly created from
-                // the refund (Refund.orderId → GetOrder → customerInvoice).
-                new StampVatlyCreditNoteOnRefundCompleted($this),
+                // onto the FluentCart refund row. The link rides on the
+                // refund.completed event (customerInvoiceUrl), so no GetOrder.
+                new StampVatlyCreditNoteOnRefundCompleted(),
                 // Dunning: when Vatly fires order.payment_failed (renewal payment
                 // failure / dunning start), flip the FluentCart subscription
                 // to `past_due` so FluentCart's own dunning notifications fire.

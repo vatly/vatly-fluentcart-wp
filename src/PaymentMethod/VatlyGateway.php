@@ -6,7 +6,7 @@ namespace Vatly\FluentCart\PaymentMethod;
 
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Modules\PaymentMethods\Core\AbstractPaymentGateway;
-use FluentCart\App\Modules\PaymentMethods\Core\PaymentInstance;
+use FluentCart\App\Services\Payments\PaymentInstance;
 use Vatly\FluentCart\Plugin;
 use Vatly\FluentCart\Webhook\IPN;
 
@@ -21,11 +21,12 @@ use Vatly\FluentCart\Webhook\IPN;
 final class VatlyGateway extends AbstractPaymentGateway
 {
     /** @var array<int, string> */
-    public array $supportedFeatures = ['payment', 'webhook', 'refund', 'subscriptions'];
+    public array $supportedFeatures = ['payment', 'webhook', 'refund'];
 
     public function __construct(private Plugin $plugin)
     {
-        parent::__construct(new VatlySettings());
+        // Passing the subscription module adds the `subscriptions` feature.
+        parent::__construct(new VatlySettings(), new VatlySubscriptions($plugin));
 
         add_action('wp_ajax_fluent_cart_vatly_webhook', [$this, 'handleIPN']);
         add_action('wp_ajax_nopriv_fluent_cart_vatly_webhook', [$this, 'handleIPN']);
@@ -41,12 +42,7 @@ final class VatlyGateway extends AbstractPaymentGateway
      * AbstractPaymentGateway::__construct as `$this->methodSlug`, which keys the
      * `fluent_cart/transaction/url_<slug>` filters) and `route` (the
      * payment-listener / order-status routing key) both resolve to the gateway
-     * slug. verified: FluentCart free 1.3.28 —
-     * GatewayManager.php:159-177 (required keys) and
-     * AbstractPaymentGateway.php:35 (`$this->methodSlug = $this->getMeta('slug')`).
-     * `status` is the enabled flag; we read it from VatlyConfig (same option/key
-     * FluentCart's own `settings->get('is_active')` reads) so it stays correct
-     * without depending on the base settings property.
+     * slug. `status` is the enabled flag from the saved settings.
      *
      * @return array<string, mixed>
      */
@@ -65,7 +61,7 @@ final class VatlyGateway extends AbstractPaymentGateway
             'icon'               => $logo,
             'brand_color'        => '#0B5FFF',
             'upcoming'           => false,
-            'status'             => $this->plugin->config()->isEnabled(),
+            'status'             => $this->settings->isActive(),
             'supported_features' => $this->supportedFeatures,
         ];
     }
@@ -76,11 +72,87 @@ final class VatlyGateway extends AbstractPaymentGateway
     }
 
     /**
+     * Front-end checkout handler.
+     *
+     * FluentCart 2.2.0 keeps the "Place order" button disabled for the selected
+     * payment method until that method's own script enables it (via the payment
+     * loader dispatched on `fluent_cart_load_payments_<route>`). A gateway that
+     * ships no script leaves the button permanently disabled. Vatly is a hosted
+     * redirect gateway with nothing to prepare on-page, so we enqueue a tiny
+     * handler that just enables the button (same pattern as FluentCart's COD
+     * gateway). Enqueued by AbstractPaymentGateway::enqueue() via prepare().
+     *
+     * verified: FluentCart free 2.2.0 — Cod::getEnqueueScriptSrc()
+     * (app/Modules/PaymentMethods/Cod/Cod.php) and the payment-loader gate.
+     *
+     * @param string $hasSubscription
+     * @return array<int, array<string, mixed>>
+     */
+    public function getEnqueueScriptSrc($hasSubscription = 'no'): array
+    {
+        return [
+            [
+                'handle'    => 'vatly-for-fluentcart-checkout',
+                'src'       => VATLY_FLUENTCART_URL . 'assets/vatly-checkout.js',
+                'in_footer' => true,
+            ],
+        ];
+    }
+
+    /**
+     * FluentCart calls this before it saves the settings screen.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $oldSettings
      * @return array<string, mixed>
+     */
+    public static function beforeSettingsUpdate($data, $oldSettings): array
+    {
+        return VatlySettings::encryptSecrets((array) $data);
+    }
+
+    /**
+     * Settings fields for FluentCart's gateway screen. FluentCart saves them
+     * under {@see VatlySettings::METHOD_HANDLER}. Test or live follows the
+     * store mode, so both key pairs are always shown.
+     *
+     * @return array<string, array<string, mixed>>
      */
     public function fields(): array
     {
-        return (new VatlySettings())->fields();
+        return [
+            'notice' => [
+                'value' => $this->renderStoreModeNotice(),
+                'label' => __('Store mode', 'vatly-for-fluentcart'),
+                'type'  => 'notice',
+            ],
+            'test_api_key' => [
+                'value' => '',
+                'label' => __('Test API key', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'test_webhook_secret' => [
+                'value' => '',
+                'label' => __('Test webhook secret', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'live_api_key' => [
+                'value' => '',
+                'label' => __('Live API key', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'live_webhook_secret' => [
+                'value' => '',
+                'label' => __('Live webhook secret', 'vatly-for-fluentcart'),
+                'type'  => 'password',
+            ],
+            'webhook_info' => [
+                'value' => '<p>' . esc_html__('Add this URL as a webhook endpoint in your Vatly dashboard:', 'vatly-for-fluentcart')
+                    . '</p><code>' . esc_html($this->plugin->config()->webhookUrl()) . '</code>',
+                'label' => __('Webhook URL', 'vatly-for-fluentcart'),
+                'type'  => 'html_attr',
+            ],
+        ];
     }
 
     /**
@@ -92,6 +164,32 @@ final class VatlyGateway extends AbstractPaymentGateway
     }
 
     /**
+     * Checkout AJAX hook. Vatly is a hosted/redirect Merchant-of-Record gateway,
+     * so there is no on-site payment intent to prepare here: the Vatly checkout
+     * session is created at order placement (see makePaymentFromPaymentInstance),
+     * and the customer is then redirected to Vatly's hosted checkout. We mirror
+     * FluentCart's own hosted-mode gateways and return a minimal success payload
+     * so the frontend proceeds to place the order.
+     *
+     * @param array<string, mixed> $data
+     * @return void
+     */
+    public function getOrderInfo($data)
+    {
+        wp_send_json(
+            [
+                'status'       => 'success',
+                'message'      => __('Order info retrieved!', 'vatly-for-fluentcart'),
+                'data'         => [],
+                'payment_args' => [
+                    'checkout_mode' => 'hosted',
+                ],
+            ],
+            200
+        );
+    }
+
+    /**
      * Refund handler — FluentCart calls this with the parent transaction, the
      * refund amount in cents (positional), and any extra payload as args.
      *
@@ -99,13 +197,19 @@ final class VatlyGateway extends AbstractPaymentGateway
      * failure, matching FluentCart's gateway contract: core's
      * Refund::processRefund assigns the return value directly to the refund
      * transaction's `vendor_charge_id`.
-     * verified: FluentCart free 1.3.28 — app/Services/Payments/Refund.php:85-92.
+     * verified: FluentCart free 2.2.0 — app/Services/Payments/Refund.php:99-106
+     * (`$refundTransaction->vendor_charge_id = $vendorRefundId`).
      *
+     * Parameters are untyped to stay signature-compatible with FluentCart's
+     * untyped AbstractPaymentGateway::processRefund($transaction, $amount, $args);
+     * the concrete types live in the docblock and are re-asserted downstream.
+     *
+     * @param OrderTransaction     $transaction
      * @param int|float            $amount  Refund amount in cents (full or partial).
      * @param array<string, mixed> $args
      * @return string|\WP_Error
      */
-    public function processRefund(OrderTransaction $transaction, $amount, array $args = [])
+    public function processRefund($transaction, $amount, $args = [])
     {
         return (new RefundService($this->plugin))->refund($transaction, (int) $amount, $args);
     }

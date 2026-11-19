@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\Tests\Unit\PaymentMethod;
 
 use Brain\Monkey\Functions;
-use FluentCart\App\Modules\PaymentMethods\Core\PaymentInstance;
+use FluentCart\App\Services\Payments\PaymentInstance;
 use Mockery;
 use Vatly\Fluent\Builders\CheckoutBuilder;
 use Vatly\Fluent\Testing\FakeCheckout;
@@ -40,12 +40,11 @@ class ProcessorCheckoutItemsTest extends TestCase
             }
         );
 
-        Functions\when('get_option')->justReturn([
-            'is_active'           => true,
-            'payment_mode'        => 'test',
+        $GLOBALS['fluent_cart_options'][\Vatly\FluentCart\PaymentMethod\VatlySettings::METHOD_HANDLER] = [
+            'is_active'           => 'yes',
             'test_api_key'        => 'test_key',
             'test_webhook_secret' => 'whsec',
-        ]);
+        ];
         Functions\when('get_post_meta')->justReturn('one_off_product_3Qb8Wz1Yt');
 
         $vatly = Mockery::mock(Vatly::class);
@@ -58,7 +57,7 @@ class ProcessorCheckoutItemsTest extends TestCase
         $order->customer = null;             // anonymous-checkout: skips customers()
         $order->email = 'buyer@example.test';
         $order->customer_name = 'Buyer';
-        $order->items = [(object) ['post_id' => 100, 'quantity' => 2]];
+        $order->order_items = [(object) ['post_id' => 100, 'quantity' => 2]];
 
         $instance = new PaymentInstance();
         $instance->order = $order;

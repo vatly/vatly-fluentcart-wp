@@ -6,18 +6,22 @@ namespace Vatly\FluentCart\Webhook\Reactions;
 
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
 use Vatly\Fluent\Contracts\CustomerBindingRepository;
 use Vatly\Fluent\Contracts\WebhookReactionInterface;
 use Vatly\API\Webhooks\Events\OrderChargebackReceived;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\Support\ChargebackBooking;
 use Vatly\FluentCart\Support\LinkedSubscription;
 
 /**
- * On Vatly `order.chargeback_received`: flip the FluentCart subscription tied
- * to the disputed order to `paused` (the documented "halt access" state) and
- * fire `vatly_fluentcart_chargeback_received` so merchants can plug in
- * license revocation, account suspension, or any other downstream effects.
+ * On Vatly `order.chargeback_received`: book the chargeback on the FluentCart
+ * order as a lost dispute, which fires FluentCart's
+ * `fluent_cart/order_payment_failed` (see {@see ChargebackBooking}); flip the
+ * subscription tied to the disputed order to `paused` (the "halt access"
+ * state) through FluentCart, which fires its pause hooks; and fire
+ * `vatly_fluentcart_chargeback_received` for anything Vatly-specific.
  *
  * `paused` is the closest semantic match in FluentCart's status enum and is
  * reversible — counterpart {@see HandleChargebackReversed} restores `active`
@@ -34,9 +38,8 @@ use Vatly\FluentCart\Support\LinkedSubscription;
  *      (`lines[].relatedResources.subscriptionId`).
  *   4. Final fallback: customer-binding → most-recent active subscription.
  *
- * Non-subscription order chargebacks (one-time purchases) don't have a
- * subscription to update — only the `vatly_fluentcart_chargeback_received`
- * action fires for those, carrying the order context.
+ * One-off orders have no subscription to pause; the booking and its
+ * FluentCart event cover them.
  */
 final class HandleChargebackReceived implements WebhookReactionInterface
 {
@@ -66,6 +69,10 @@ final class HandleChargebackReceived implements WebhookReactionInterface
             return;
         }
 
+        // Book the order first, so subscription listeners already see the
+        // order's new payment status.
+        ChargebackBooking::recordLost($event->originalOrderId, $event->chargebackId, $event->subtotal, $event->reason);
+
         $subscription = $this->resolveSubscription($event->originalOrderId);
 
         if ($subscription !== null) {
@@ -82,7 +89,8 @@ final class HandleChargebackReceived implements WebhookReactionInterface
                 );
             }
 
-            $subscription->fill(['status' => 'paused'])->save();
+            // FluentCart's own state sync fires its pause hooks.
+            $subscription = SubscriptionService::syncSubscriptionStates($subscription, ['status' => 'paused']) ?? $subscription;
         }
 
         do_action(
@@ -141,7 +149,7 @@ final class HandleChargebackReceived implements WebhookReactionInterface
                 if ($hostCustomerId !== null) {
                     return Subscription::query()
                         ->where('customer_id', (int) $hostCustomerId)
-                        ->where('payment_method', 'vatly')
+                        ->where('current_payment_method', 'vatly')
                         ->whereIn('status', ['active', 'trialing', 'failing', 'past_due'])
                         ->orderByDesc('id')
                         ->first();

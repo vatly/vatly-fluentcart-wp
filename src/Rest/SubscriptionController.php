@@ -156,7 +156,7 @@ final class SubscriptionController
     private function findSubscription(int $id): ?Subscription
     {
         $subscription = Subscription::query()->find($id);
-        if (! $subscription || ($subscription->payment_method ?? null) !== 'vatly') {
+        if (! $subscription || ($subscription->current_payment_method ?? null) !== 'vatly') {
             return null;
         }
         return $subscription;
