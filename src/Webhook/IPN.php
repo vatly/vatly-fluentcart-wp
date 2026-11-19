@@ -21,6 +21,13 @@ final class IPN
 
     public function handle(): void
     {
+        // Without a secret the signature check would accept an HMAC made with
+        // an empty key, which anyone can compute. Refuse instead; Vatly retries.
+        if ($this->plugin->config()->getWebhookSecret() === null) {
+            $this->respond(503, ['error' => 'webhook_secret_not_configured']);
+            return;
+        }
+
         $payload = file_get_contents('php://input') ?: '';
         $signature = $this->signatureHeader();
 
