@@ -138,6 +138,16 @@ final class FluentCartRefundRepository implements RefundRepositoryInterface
             'total'            => $net,
         ], $parent);
 
+        if (is_wp_error($recorded) && $recorded->get_error_code() === 'refund_lock_timeout') {
+            // Another refund held the order: fail the webhook so Vatly
+            // redelivers it instead of losing the refund.
+            throw new RuntimeException(esc_html(sprintf(
+                '[vatly-for-fluentcart] could not record refund %s: %s',
+                $data->vatlyId,
+                $recorded->get_error_message(),
+            )));
+        }
+
         if (is_wp_error($recorded)) {
             error_log(sprintf(
                 '[vatly-for-fluentcart] failed to record out-of-band refund %s: %s',

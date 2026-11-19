@@ -99,16 +99,21 @@ final class RefundService
 
         $payload = $metadata !== [] ? ['metadata' => $metadata] : [];
 
+        $requestedAt = time();
         try {
             $refund = $this->apiClientFor($transaction)->orderRefunds->createFullRefundForOrderId(
                 (string) $vatlyOrderId,
                 $payload
             );
         } catch (Throwable $e) {
+            $refund = $this->refundCreatedDespite($e, $transaction, (string) $vatlyOrderId, $transactionTotal, $requestedAt);
+        }
+
+        if ($refund instanceof Throwable) {
             return new WP_Error(
                 'vatly_refund_api_failed',
                 /* translators: %s: error message returned by the Vatly API */
-                sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $e->getMessage())
+                sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $refund->getMessage())
             );
         }
 
@@ -188,16 +193,21 @@ final class RefundService
             $item['description'] = $args['reason'];
         }
 
+        $requestedAt = time();
         try {
             $refund = $this->apiClientFor($transaction)->orderRefunds->createForOrderId(
                 $vatlyOrderId,
                 ['items' => [$item]]
             );
         } catch (Throwable $e) {
+            $refund = $this->refundCreatedDespite($e, $transaction, $vatlyOrderId, $amount, $requestedAt);
+        }
+
+        if ($refund instanceof Throwable) {
             return new WP_Error(
                 'vatly_refund_api_failed',
                 /* translators: %s: error message returned by the Vatly API */
-                sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $e->getMessage())
+                sprintf(__('Vatly refund failed: %s', 'vatly-for-fluentcart'), $refund->getMessage())
             );
         }
 
@@ -211,6 +221,45 @@ final class RefundService
 
         // Scalar vendor refund id → FluentCart stamps it on the refund txn it created.
         return (string) ($refund->id ?? '');
+    }
+
+    /**
+     * A create call that timed out can still have created the refund: Vatly
+     * may finish it before its response reaches us. Reporting that as a
+     * failure invites the merchant to record the refund a second time, so
+     * look it up instead and adopt it when exactly one refund for this net
+     * amount was created at Vatly since the request started.
+     *
+     * @return object|Throwable The adopted Vatly refund, or the original error.
+     */
+    private function refundCreatedDespite(Throwable $error, OrderTransaction $transaction, string $vatlyOrderId, int $netAmount, int $requestedAt)
+    {
+        if (stripos($error->getMessage(), 'timed out') === false) {
+            return $error;
+        }
+
+        try {
+            $refunds = $this->apiClientFor($transaction)->orderRefunds->pageForOrderId($vatlyOrderId);
+        } catch (Throwable) {
+            return $error;
+        }
+
+        $matches = [];
+        foreach ($refunds as $refund) {
+            $createdAt = strtotime((string) ($refund->createdAt ?? ''));
+            if ($createdAt === false || $createdAt < $requestedAt - 60) {
+                continue;
+            }
+            if (in_array((string) ($refund->status ?? ''), [VatlyRefundStatus::FAILED, VatlyRefundStatus::CANCELED], true)) {
+                continue;
+            }
+            if (! isset($refund->subtotal) || $refund->subtotal->toCents() !== $netAmount) {
+                continue;
+            }
+            $matches[] = $refund;
+        }
+
+        return count($matches) === 1 ? $matches[0] : $error;
     }
 
     /**

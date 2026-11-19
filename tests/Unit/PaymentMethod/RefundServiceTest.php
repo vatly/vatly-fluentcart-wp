@@ -228,6 +228,68 @@ class RefundServiceTest extends TestCase
 
     // --- helpers ---
 
+    public function test_a_timed_out_full_refund_adopts_the_refund_vatly_created(): void
+    {
+        // The create call times out after Vatly already made the refund.
+        // Reporting a failure would invite a second, local refund; the
+        // refund created since the request for this net amount is adopted.
+        $refunds = Mockery::mock(OrderRefundEndpoint::class);
+        $refunds->shouldReceive('createFullRefundForOrderId')->once()
+            ->andThrow(new \RuntimeException('Curl error: Operation timed out after 10002 milliseconds'));
+        $refunds->shouldReceive('pageForOrderId')->once()->with('order_abc')->andReturn([
+            $this->listedRefund('refund_old', 'refunded', 2300, '-1 day'),
+            $this->listedRefund('refund_other_amount', 'processing', 500, 'now'),
+            $this->listedRefund('refund_new', 'processing', 2300, 'now'),
+        ]);
+
+        $result = $this->serviceWith(Mockery::mock(OrderEndpoint::class), $refunds)
+            ->refund($this->transaction('order_abc', 2300), 0);
+
+        self::assertSame('refund_new', $result);
+        self::assertSame('refund_new', Refund::$lastRecorded[0]['vendor_charge_id']);
+        self::assertSame('pending', Refund::$lastRecorded[0]['status']);
+    }
+
+    public function test_a_timed_out_refund_stays_a_failure_unless_exactly_one_refund_matches(): void
+    {
+        $refunds = Mockery::mock(OrderRefundEndpoint::class);
+        $refunds->shouldReceive('createFullRefundForOrderId')->once()
+            ->andThrow(new \RuntimeException('Operation timed out'));
+        $refunds->shouldReceive('pageForOrderId')->once()->andReturn([
+            $this->listedRefund('refund_a', 'processing', 2300, 'now'),
+            $this->listedRefund('refund_b', 'processing', 2300, 'now'),
+        ]);
+
+        $result = $this->serviceWith(Mockery::mock(OrderEndpoint::class), $refunds)
+            ->refund($this->transaction('order_abc', 2300), 0);
+
+        self::assertInstanceOf(WP_Error::class, $result);
+        self::assertNull(Refund::$lastRecorded);
+    }
+
+    public function test_a_refund_rejected_by_vatly_is_not_looked_up(): void
+    {
+        $refunds = Mockery::mock(OrderRefundEndpoint::class);
+        $refunds->shouldReceive('createFullRefundForOrderId')->once()
+            ->andThrow(new \RuntimeException('The order is already fully refunded'));
+        $refunds->shouldNotReceive('pageForOrderId');
+
+        $result = $this->serviceWith(Mockery::mock(OrderEndpoint::class), $refunds)
+            ->refund($this->transaction('order_abc', 2300), 0);
+
+        self::assertInstanceOf(WP_Error::class, $result);
+    }
+
+    private function listedRefund(string $id, string $status, int $netCents, string $createdAt): object
+    {
+        return (object) [
+            'id'        => $id,
+            'status'    => $status,
+            'createdAt' => gmdate('c', (int) strtotime($createdAt)),
+            'subtotal'  => new \Vatly\API\Types\Money('EUR', number_format($netCents / 100, 2, '.', '')),
+        ];
+    }
+
     private function transaction(?string $orderId, int $total, string $currency = 'EUR'): OrderTransaction
     {
         $tx                  = new OrderTransaction();
