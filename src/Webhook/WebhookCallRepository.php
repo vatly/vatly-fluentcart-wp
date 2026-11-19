@@ -16,6 +16,29 @@ final class WebhookCallRepository implements WebhookCallRepositoryInterface
 {
     public const TABLE = 'vatly_webhook_calls';
 
+    /** Daily cron that deletes logged webhooks past the retention period. */
+    public const PRUNE_HOOK = 'vatly_fluentcart_prune_webhook_calls';
+
+    /**
+     * Days a logged webhook is kept. The log holds Vatly's full event JSON,
+     * customer name and address included, and nothing reads it back, so it is
+     * kept only as long as it helps debugging. Filter:
+     * `vatly_fluentcart_webhook_log_retention_days`.
+     */
+    public const RETENTION_DAYS = 30;
+
+    public static function registerPruning(): void
+    {
+        add_action(self::PRUNE_HOOK, static function (): void {
+            $days = (int) apply_filters('vatly_fluentcart_webhook_log_retention_days', self::RETENTION_DAYS);
+            (new self())->cleanUp(max($days, 1));
+        });
+
+        if (! wp_next_scheduled(self::PRUNE_HOOK)) {
+            wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', self::PRUNE_HOOK);
+        }
+    }
+
     public function record(
         string $id,
         string $resource,

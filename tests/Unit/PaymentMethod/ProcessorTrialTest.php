@@ -115,12 +115,11 @@ class ProcessorTrialTest extends TestCase
      */
     private function process(Mockery\MockInterface $builder, Subscription $subscription): array
     {
-        Functions\when('get_option')->justReturn([
-            'is_active'           => true,
-            'payment_mode'        => 'test',
+        $GLOBALS['fluent_cart_options'][\Vatly\FluentCart\PaymentMethod\VatlySettings::METHOD_HANDLER] = [
+            'is_active'           => 'yes',
             'test_api_key'        => 'test_key',
             'test_webhook_secret' => 'whsec',
-        ]);
+        ];
         Functions\when('get_post_meta')->justReturn('subscription_plan_42');
 
         $vatly = Mockery::mock(Vatly::class);

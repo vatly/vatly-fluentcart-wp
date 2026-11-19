@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\Support;
 
+use Vatly\FluentCart\PaymentMethod\VatlySettings;
+
 /**
  * Version-gated upgrade routine.
  *
@@ -43,6 +45,14 @@ final class Upgrader
 
     public function maybeUpgrade(): void
     {
+        // Not version-gated: builds before 0.1.2-alpha never stamped a version
+        // this could compare against, and the check is one autoloaded option.
+        // The settings class extends FluentCart's, and the migration writes to
+        // FluentCart's storage, so it waits until FluentCart is active.
+        if (class_exists(\FluentCart\App\Modules\PaymentMethods\Core\BaseGatewaySettings::class)) {
+            VatlySettings::migrateLegacyOption();
+        }
+
         $stored = (string) get_option(self::DB_VERSION_OPTION, '0');
 
         if (version_compare($stored, $this->currentVersion, '>=')) {

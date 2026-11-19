@@ -6,6 +6,7 @@ namespace Vatly\FluentCart\Support;
 
 use FluentCart\App\Models\Subscription;
 use Vatly\API\Resources\Order;
+use Vatly\API\Types\OrderLineData;
 
 /**
  * Resolves the FluentCart subscription a Vatly order belongs to from the
@@ -30,17 +31,41 @@ final class LinkedSubscription
      */
     public static function forOrder(Order $order): ?Subscription
     {
-        foreach ($order->lines() as $line) {
-            $vatlySubscriptionId = (string) ($line->relatedResources->subscriptionId ?? '');
-            if ($vatlySubscriptionId === '') {
-                continue;
-            }
+        return self::forLines($order->lines());
+    }
 
-            // A Vatly order belongs to one subscription, so the first link decides.
-            return Subscription::query()
-                ->where('vendor_subscription_id', $vatlySubscriptionId)
-                ->where('payment_method', 'vatly')
-                ->first();
+    /**
+     * Same as {@see self::forOrder()}, for lines a webhook event already
+     * carries.
+     *
+     * @param iterable<int, OrderLineData|\Vatly\API\Resources\OrderLine> $lines
+     */
+    public static function forLines(iterable $lines): ?Subscription
+    {
+        $vatlySubscriptionId = self::vatlySubscriptionId($lines);
+        if ($vatlySubscriptionId === null) {
+            return null;
+        }
+
+        return Subscription::query()
+            ->where('vendor_subscription_id', $vatlySubscriptionId)
+            ->where('current_payment_method', 'vatly')
+            ->first();
+    }
+
+    /**
+     * The Vatly subscription id the lines link to. A Vatly order belongs to
+     * one subscription, so the first link decides.
+     *
+     * @param iterable<int, OrderLineData|\Vatly\API\Resources\OrderLine> $lines
+     */
+    public static function vatlySubscriptionId(iterable $lines): ?string
+    {
+        foreach ($lines as $line) {
+            $vatlySubscriptionId = (string) ($line->relatedResources->subscriptionId ?? '');
+            if ($vatlySubscriptionId !== '') {
+                return $vatlySubscriptionId;
+            }
         }
 
         return null;

@@ -55,7 +55,30 @@ class FluentCartOrderRepositoryTest extends TestCase
 
         self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
         self::assertContains(['vendor_subscription_id', 'subscription_B'], Builder::$wheres);
+        self::assertContains(['current_payment_method', 'vatly'], Builder::$wheres);
         self::assertNotContains(['customer_id', '42'], Builder::$wheres);
+    }
+
+    public function test_a_guests_renewal_is_recorded_by_its_line_link_without_a_customer_binding(): void
+    {
+        // A guest checkout records no customer binding, so hostCustomerId is
+        // null. The line link alone must route the renewal.
+        $linked = $this->subscription(12, 'active');
+        Builder::$nextResults = [$linked, $this->renewalTransaction()];
+
+        $line   = ['id' => 'orderline_1', 'productType' => 'subscription_plan', 'productId' => 'plan_1', 'relatedResources' => ['subscriptionId' => 'subscription_B']];
+        $plugin = $this->pluginReturningOrder($this->vatlyOrder('order_renewal_1', [$line]));
+
+        (new FluentCartOrderRepository($plugin))->store(new StoreOrderData(
+            vatlyId:  'order_renewal_1',
+            customerId: 'customer_1',
+            status:   'paid',
+            total:    2420,
+            currency: 'EUR',
+            testmode: false,
+        ));
+
+        self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
     }
 
     public function test_renewal_falls_back_to_the_customers_newest_subscription_without_a_link(): void
@@ -82,20 +105,123 @@ class FluentCartOrderRepositoryTest extends TestCase
         self::assertSame('order_renewal_1', $result->getVatlyId());
     }
 
+    public function test_renewal_moves_the_next_billing_date_to_vatlys_next_renewal(): void
+    {
+        // FluentCart's hourly job expires an active subscription once
+        // next_billing_date plus the grace period has passed, and its renewal
+        // sync only moves that date when it's passed in. So a paid renewal must
+        // carry Vatly's next renewal date, or a paying member loses access.
+        $linked = $this->subscription(12, 'active');
+        $linked->vendor_subscription_id = 'subscription_B';
+        $linked->next_billing_date = '2026-11-19 10:00:00';
+        Builder::$nextResults = [$linked, $this->renewalTransaction()];
+
+        $this->storeRenewal(
+            ['subscriptionId' => 'subscription_B'],
+            $this->vatlySubscription('subscription_B', ['nextRenewalAt' => '2026-12-19T10:00:00+01:00']),
+        );
+
+        self::assertSame(
+            ['status' => 'active', 'next_billing_date' => '2026-12-19 09:00:00'],
+            SubscriptionService::$lastRecorded[2] ?? null,
+        );
+        self::assertSame('2026-12-19 09:00:00', $linked->next_billing_date);
+        self::assertSame(1000, SubscriptionService::$lastRecorded[1]['total'] ?? null, 'the net, not Vatly\'s gross');
+    }
+
+    public function test_the_initial_paid_order_links_and_activates_the_checkout_subscription(): void
+    {
+        // Vatly copies checkout metadata onto the order, not the subscription.
+        // So the signup's order.paid links the two: its metadata names the
+        // FluentCart subscription, its line the Vatly one.
+        $checkout = new OrderTransaction();
+        $checkout->id = 5;
+        $checkout->status = 'pending';
+        $subscription = $this->subscription(12, 'intended');
+        Builder::$nextResults = [$checkout, $subscription, $checkout];
+
+        $plugin = $this->pluginReturningOrder(
+            $this->vatlyOrder('order_signup_1', []),
+            $this->vatlySubscription('subscription_B', [
+                'customerId'         => 'customer_1',
+                'subscriptionPlanId' => 'subscription_plan_1',
+                'quantity'           => 1,
+                'nextRenewalAt'      => '2026-12-19T10:24:16+00:00',
+            ]),
+        );
+
+        (new FluentCartOrderRepository($plugin))->store(new StoreOrderData(
+            vatlyId:  'order_signup_1',
+            customerId: 'customer_1',
+            status:   'paid',
+            total:    2420,
+            currency: 'EUR',
+            testmode: false,
+            metadata: ['fluentcart_transaction_id' => '5', 'fluentcart_subscription_id' => '12'],
+            lines:    [new \Vatly\API\Types\OrderLineData(
+                vatlyId: 'orderline_1',
+                description: 'Pro plan',
+                quantity: 1,
+                basePrice: new \Vatly\API\Types\Money('EUR', '20.00'),
+                total: new \Vatly\API\Types\Money('EUR', '24.20'),
+                subtotal: new \Vatly\API\Types\Money('EUR', '20.00'),
+                productType: 'subscription_plan',
+                productId: 'subscription_plan_1',
+                relatedResources: new \Vatly\API\Types\OrderLineRelatedResources('subscription_B'),
+            )],
+        ));
+
+        self::assertSame('succeeded', $checkout->status);
+        self::assertSame('active', $subscription->status);
+        self::assertSame('subscription_B', $subscription->vendor_subscription_id);
+        self::assertSame('2026-12-19 10:24:16', $subscription->next_billing_date);
+        self::assertCount(1, \FluentCart\App\Events\Subscription\SubscriptionActivated::$dispatched);
+    }
+
+    public function test_a_failed_payment_never_confirms_or_records_a_payment(): void
+    {
+        // order.payment_failed for an order with no local row reaches store()
+        // with Vatly's unpaid status. Neither the checkout transaction nor a
+        // renewal may be marked paid from it.
+        $checkout = new OrderTransaction();
+        $checkout->id = 5;
+        $checkout->status = 'pending';
+        Builder::$nextResults = [$checkout, $this->subscription(12, 'active')];
+
+        $repository = new FluentCartOrderRepository($this->pluginReturningOrder($this->vatlyOrder('order_failed_1', [])));
+        foreach ([['fluentcart_transaction_id' => '5'], []] as $metadata) {
+            $result = $repository->store(new StoreOrderData(
+                vatlyId:        'order_failed_1',
+                customerId:     'customer_1',
+                status:         'pending',
+                total:          1210,
+                currency:       'EUR',
+                testmode:       false,
+                hostCustomerId: '42',
+                metadata:       $metadata,
+            ));
+            self::assertSame('order_failed_1', $result->getVatlyId());
+        }
+
+        self::assertSame('pending', $checkout->status);
+        self::assertNull(SubscriptionService::$lastRecorded);
+        self::assertSame([], Builder::$wheres, 'no FluentCart row was looked up');
+    }
+
     /**
      * Run store() for a paid renewal: no checkout transaction metadata, and a
      * host customer resolved through the customer bindings.
      *
      * @param array<string, mixed>|null $relatedResources the line's relatedResources, or null to leave it out
      */
-    private function storeRenewal(?array $relatedResources): OrderInterface
+    private function storeRenewal(?array $relatedResources, ?\Vatly\API\Resources\Subscription $vatlySubscription = null): OrderInterface
     {
         $line = ['id' => 'orderline_1', 'productType' => 'subscription', 'productId' => 'subscription_B'];
         if ($relatedResources !== null) {
             $line['relatedResources'] = $relatedResources;
         }
 
-        $plugin = $this->pluginReturningOrder($this->vatlyOrder('order_renewal_1', [$line]));
+        $plugin = $this->pluginReturningOrder($this->vatlyOrder('order_renewal_1', [$line]), $vatlySubscription);
 
         return (new FluentCartOrderRepository($plugin))->store(new StoreOrderData(
             vatlyId:        'order_renewal_1',
@@ -104,6 +230,7 @@ class FluentCartOrderRepositoryTest extends TestCase
             total:          1210,
             currency:       'EUR',
             testmode:       false,
+            subtotal:       1000,
             hostCustomerId: '42',
         ));
     }
@@ -151,8 +278,7 @@ class FluentCartOrderRepositoryTest extends TestCase
 
     public function test_update_does_not_write_paid_status_back(): void
     {
-        // FluentCart's local enum uses `succeeded` (set by
-        // Confirmations::confirmPaymentSuccessByCharge during store()).
+        // FluentCart's local enum uses `succeeded` (set during store()).
         // Writing back `paid` would push the transaction out of FluentCart's
         // documented state — and re-deliveries hit update() with `paid` every
         // time. So `paid` must be silently dropped from the dirty set.
@@ -186,19 +312,18 @@ class FluentCartOrderRepositoryTest extends TestCase
         $this->assertHookExpectations();
     }
 
-    public function test_update_writes_total_currency_and_invoice_when_provided(): void
+    public function test_update_keeps_fluentcarts_amounts(): void
     {
+        // Vatly's total is the gross the customer paid Vatly as Merchant of
+        // Record; FluentCart keeps the merchant's net sale. A re-delivered
+        // order.paid must not overwrite it, or FluentCart shows an overpayment.
         $tx = Mockery::mock(OrderTransaction::class);
-        $tx->shouldReceive('fill')->once()->with([
-            'total'          => 2300,
-            'currency'       => 'EUR',
-            'invoice_number' => 'INV-42',
-        ])->andReturnSelf();
-        $tx->shouldReceive('save')->once()->andReturn(true);
+        $tx->shouldNotReceive('fill');
+        $tx->shouldNotReceive('save');
 
         (new FluentCartOrderRepository($this->plugin()))->update(
             new FluentCartOrder($tx),
-            new UpdateOrderData(total: 2300, currency: 'EUR', invoiceNumber: 'INV-42'),
+            new UpdateOrderData(status: 'paid', total: 2420, currency: 'EUR', invoiceNumber: 'INV-42'),
         );
 
         $this->assertHookExpectations();
@@ -213,30 +338,6 @@ class FluentCartOrderRepositoryTest extends TestCase
         (new FluentCartOrderRepository($this->plugin()))->update(
             new FluentCartOrder($tx),
             new UpdateOrderData(),
-        );
-
-        $this->assertHookExpectations();
-    }
-
-    public function test_update_canceled_plus_field_changes_combines_into_one_save(): void
-    {
-        $tx = Mockery::mock(OrderTransaction::class);
-        $tx->shouldReceive('fill')->once()->with([
-            'total'          => 1000,
-            'currency'       => 'EUR',
-            'invoice_number' => 'INV-9',
-            'status'         => 'canceled',
-        ])->andReturnSelf();
-        $tx->shouldReceive('save')->once()->andReturn(true);
-
-        (new FluentCartOrderRepository($this->plugin()))->update(
-            new FluentCartOrder($tx),
-            new UpdateOrderData(
-                status: 'canceled',
-                total: 1000,
-                currency: 'EUR',
-                invoiceNumber: 'INV-9',
-            ),
         );
 
         $this->assertHookExpectations();

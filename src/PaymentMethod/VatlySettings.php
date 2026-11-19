@@ -4,115 +4,125 @@ declare(strict_types=1);
 
 namespace Vatly\FluentCart\PaymentMethod;
 
+use FluentCart\Api\StoreSettings;
+use FluentCart\App\Helpers\Helper;
 use FluentCart\App\Modules\PaymentMethods\Core\BaseGatewaySettings;
-use Vatly\FluentCart\Config\VatlyConfig;
 
 /**
- * Settings fields rendered by FluentCart on the gateway configuration screen.
+ * The Vatly gateway's saved settings.
  *
- * FluentCart's BaseGatewaySettings keeps per-gateway settings in the fct_meta
- * table keyed by {@see $methodHandler}. This gateway instead keeps its settings
- * in its own WP option (see {@see VatlyConfig::OPTION_KEY}) so the same values
- * are readable through the framework-agnostic ConfigurationInterface that
- * vatly-fluent-php consumes. We therefore override the three abstract accessors
- * ({@see get()}, {@see getMode()}, {@see isActive()}) to read that option
- * directly rather than the fct_meta blob the base constructor loads.
+ * FluentCart's settings screen saves them with `fluent_cart_update_option()`
+ * under {@see self::METHOD_HANDLER} (see
+ * `AbstractPaymentGateway::updateSettings()`), and `BaseGatewaySettings` loads
+ * them back. `is_active` is `'yes'` / `'no'`, like FluentCart's own gateways.
+ *
+ * Test or live follows FluentCart's store mode (Settings → Store mode), as it
+ * does for FluentCart's built-in gateways, so the Vatly key in use always
+ * matches the mode FluentCart stamps on the order.
+ *
+ * The API keys and webhook secrets are stored encrypted with FluentCart's
+ * `Helper::encryptKey()`, as FluentCart does for its Stripe and PayPal keys
+ * (key from `FLUENT_CART_ENCRYPTION_KEY`, else WordPress's `LOGGED_IN_KEY`).
  */
 final class VatlySettings extends BaseGatewaySettings
 {
-    public $methodHandler = 'fluent_cart_payment_settings_' . VATLY_FLUENTCART_GATEWAY_SLUG;
+    public const METHOD_HANDLER = 'fluent_cart_payment_settings_vatly';
+
+    /** Settings stored encrypted. */
+    public const SECRET_FIELDS = ['test_api_key', 'test_webhook_secret', 'live_api_key', 'live_webhook_secret'];
+
+    /** The option builds before 0.1.2-alpha stored everything in, in plain text. */
+    public const LEGACY_OPTION = 'fluent_cart_vatly_settings';
+
+    /** @var string */
+    public $methodHandler = self::METHOD_HANDLER;
 
     /**
+     * @param array<string, mixed> $settings
      * @return array<string, mixed>
+     */
+    public static function encryptSecrets(array $settings): array
+    {
+        foreach (self::SECRET_FIELDS as $field) {
+            if (! empty($settings[$field]) && is_string($settings[$field])) {
+                $settings[$field] = Helper::encryptKey(trim($settings[$field]));
+            }
+        }
+
+        return $settings;
+    }
+
+    /**
+     * The plain value of a stored secret. A value saved before encryption is
+     * returned as is.
+     *
+     * @param mixed $stored
+     */
+    public static function revealSecret($stored): string
+    {
+        $stored = (string) $stored;
+        if ($stored === '' || ! Helper::isValueEncrypted($stored)) {
+            return $stored;
+        }
+
+        return (string) Helper::decryptKey($stored);
+    }
+
+    /**
+     * Move settings from the plain-text option older builds used into
+     * FluentCart's store, encrypted, and delete the old option. Does nothing
+     * once the old option is gone, or when settings were already saved here.
+     */
+    public static function migrateLegacyOption(): void
+    {
+        $legacy = get_option(self::LEGACY_OPTION, null);
+        if (! is_array($legacy) || ! function_exists('fluent_cart_update_option')) {
+            return;
+        }
+
+        $current = fluent_cart_get_option(self::METHOD_HANDLER, []);
+        if (! is_array($current) || empty(array_filter(array_intersect_key($current, array_flip(self::SECRET_FIELDS))))) {
+            $migrated = array_intersect_key($legacy, array_flip(self::SECRET_FIELDS));
+            $migrated['is_active'] = empty($legacy['is_active']) || $legacy['is_active'] === 'no' ? 'no' : 'yes';
+            fluent_cart_update_option(self::METHOD_HANDLER, self::encryptSecrets(array_merge(static::getDefaults(), $migrated)));
+        }
+
+        delete_option(self::LEGACY_OPTION);
+    }
+
+    /**
+     * @return array<string, string>
      */
     public static function getDefaults(): array
     {
         return [
-            'is_active'    => false,
-            'payment_mode' => 'test',
+            'is_active'           => 'no',
+            'test_api_key'        => '',
+            'test_webhook_secret' => '',
+            'live_api_key'        => '',
+            'live_webhook_secret' => '',
         ];
     }
 
     /**
-     * Read a single setting (or all of them when $key is empty) from this
-     * gateway's own option store.
-     *
-     * @param string $key
-     * @return mixed
+     * @return mixed The whole settings array when `$key` is empty.
      */
     public function get($key = '')
     {
-        $all = (array) get_option(VatlyConfig::OPTION_KEY, []);
-
-        // FluentCart's checkout (PaymentMethods::getActiveMethodInstance) and
-        // settings UI expect `is_active` as the string 'yes'/'no'. Our option
-        // stores it as a boolean (VatlyConfig reads it that way), so normalize
-        // to FluentCart's convention on the way out.
-        $all['is_active'] = empty($all['is_active']) ? 'no' : 'yes';
-
-        if ($key === '') {
-            return $all;
+        if ($key === '' || $key === null) {
+            return $this->settings;
         }
 
-        return $all[$key] ?? null;
+        return $this->settings[$key] ?? null;
     }
 
-    public function getMode()
+    public function getMode(): string
     {
-        return $this->get('payment_mode') ?: 'test';
+        return (new StoreSettings())->get('order_mode') === 'live' ? 'live' : 'test';
     }
 
-    public function isActive()
+    public function isActive(): bool
     {
-        return $this->get('is_active') === 'yes';
-    }
-
-    /**
-     * @return array<string, array<string, mixed>>
-     */
-    public function fields(): array
-    {
-        return [
-            'is_active' => [
-                'type'  => 'checkbox',
-                'label' => __('Enable Vatly', 'vatly-for-fluentcart'),
-            ],
-            'payment_mode' => [
-                'type'    => 'radio_group',
-                'label'   => __('Mode', 'vatly-for-fluentcart'),
-                'options' => [
-                    'test' => __('Test', 'vatly-for-fluentcart'),
-                    'live' => __('Live', 'vatly-for-fluentcart'),
-                ],
-                'default' => 'test',
-            ],
-            'test_api_key' => [
-                'type'        => 'text',
-                'label'       => __('Test API Key', 'vatly-for-fluentcart'),
-                'visible'     => ['payment_mode' => 'test'],
-            ],
-            'test_webhook_secret' => [
-                'type'        => 'password',
-                'label'       => __('Test Webhook Secret', 'vatly-for-fluentcart'),
-                'description' => __('Used to verify the Vatly-Signature header on incoming webhook deliveries.', 'vatly-for-fluentcart'),
-                'visible'     => ['payment_mode' => 'test'],
-            ],
-            'live_api_key' => [
-                'type'        => 'text',
-                'label'       => __('Live API Key', 'vatly-for-fluentcart'),
-                'visible'     => ['payment_mode' => 'live'],
-            ],
-            'live_webhook_secret' => [
-                'type'        => 'password',
-                'label'       => __('Live Webhook Secret', 'vatly-for-fluentcart'),
-                'visible'     => ['payment_mode' => 'live'],
-            ],
-            'webhook_url_display' => [
-                'type'        => 'html',
-                'label'       => __('Webhook URL', 'vatly-for-fluentcart'),
-                'html'        => '<code>' . esc_html((new VatlyConfig())->webhookUrl()) . '</code>',
-                'description' => __('Configure this URL in your Vatly dashboard under Webhooks.', 'vatly-for-fluentcart'),
-            ],
-        ];
+        return ($this->settings['is_active'] ?? 'no') === 'yes';
     }
 }

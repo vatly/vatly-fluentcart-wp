@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Vatly\FluentCart\Repositories;
 
 use DateTimeImmutable;
+use FluentCart\App\Events\Subscription\SubscriptionActivated;
 use FluentCart\App\Models\Subscription;
+use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
 use Throwable;
 use Vatly\Fluent\Contracts\SubscriptionInterface;
 use Vatly\Fluent\Contracts\SubscriptionRepositoryInterface;
@@ -13,6 +15,7 @@ use Vatly\Fluent\Data\StoreSubscriptionData;
 use Vatly\Fluent\Data\UpdateSubscriptionData;
 use Vatly\FluentCart\Models\FluentCartSubscription;
 use Vatly\FluentCart\Plugin;
+use Vatly\FluentCart\PaymentMethod\VatlySubscriptions;
 
 /**
  * Bridges fluent's SubscriptionRepository contract to FluentCart's data layer.
@@ -23,20 +26,15 @@ use Vatly\FluentCart\Plugin;
  * stamped (`fluentcart_subscription_id`) and back-fills the vendor IDs +
  * activates it.
  *
- * Column mapping follows FluentCart's documented Subscription schema:
- * cancellation timestamp lives in `canceled_at`, grace-period end lives in
- * `expire_at`, the status enum uses `canceled` (not `cancelled`).
+ * Every write goes through FluentCart's
+ * `SubscriptionService::syncSubscriptionStates()`, the method FluentCart's own
+ * gateways use, so status changes fire FluentCart's subscription hooks
+ * (`fluent_cart/payments/subscription_{status}`, status_changed, canceled,
+ * reactivated). A canceled subscription keeps access until
+ * `next_billing_date`, so a cancellation sets that column to Vatly's end date.
  */
 final class FluentCartSubscriptionRepository implements SubscriptionRepositoryInterface
 {
-    /**
-     * Loop-guard. Set to true while we're writing to a FluentCart subscription
-     * row from inside a Vatly webhook reaction; checked by
-     * {@see \Vatly\FluentCart\Plugin::propagateCancellation} so the outbound
-     * cancel-at-Vatly path doesn't fire on inbound webhook-driven cancellations.
-     */
-    public static bool $suppressOutboundCancel = false;
-
     /**
      * Post-meta key on the FluentCart subscription row that records Vatly's
      * reason for a cancellation (`merchant_request` / `customer_request` /
@@ -62,11 +60,9 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
         $fluentCartSubId   = $this->subscriptionIdFromMetadata($vatlySubscription);
 
         if ($fluentCartSubId === null) {
-            error_log(sprintf(
-                '[vatly-for-fluentcart] subscription.started %s: no fluentcart_subscription_id in Vatly metadata',
-                $data->vatlyId,
-            ));
-            return $this->orphanWrapper($data);
+            // The usual case: the initial order.paid links and activates it,
+            // whichever of the two webhooks arrives first.
+            return $this->findByVatlyId($data->vatlyId) ?? $this->orphanWrapper($data);
         }
 
         $subscription = Subscription::query()->find($fluentCartSubId);
@@ -79,15 +75,48 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
             return $this->orphanWrapper($data);
         }
 
-        $this->saveSuppressingOutbound($subscription, array_merge([
-            'vendor_subscription_id' => $data->vatlyId,
-            'vendor_customer_id'     => $data->customerId,
-            'vendor_plan_id'         => $data->planId,
-            'status'                 => 'active',
-            'quantity'               => $data->quantity,
-        ], $this->billingScheduleFrom($vatlySubscription)));
+        return new FluentCartSubscription($this->activate($subscription, $data->vatlyId, $vatlySubscription));
+    }
 
-        return new FluentCartSubscription($subscription);
+    /**
+     * Link a FluentCart subscription to its Vatly subscription and activate it.
+     *
+     * Vatly doesn't copy checkout metadata onto the subscription, so store()
+     * usually can't name the FluentCart row. The initial paid order can: its
+     * metadata names the FluentCart subscription and its line links the Vatly
+     * one. {@see FluentCartOrderRepository} calls this from there.
+     *
+     * @param object|null $vatlySubscription The Vatly subscription resource, when already fetched.
+     */
+    public function activate(Subscription $subscription, string $vatlySubscriptionId, ?object $vatlySubscription = null, ?bool $testmode = null): Subscription
+    {
+        $vatlySubscription ??= $this->fetchVatlySubscription($vatlySubscriptionId, $testmode);
+
+        $schedule   = $this->billingScheduleFrom($vatlySubscription);
+        $activating = in_array((string) $subscription->status, ['pending', 'intended'], true);
+        $args       = array_merge(array_filter([
+            'vendor_subscription_id' => $vatlySubscriptionId,
+            'vendor_customer_id'     => $vatlySubscription->customerId ?? null,
+            'vendor_plan_id'         => $vatlySubscription->subscriptionPlanId ?? null,
+            'quantity'               => $vatlySubscription->quantity ?? null,
+        ], fn ($v) => $v !== null), $schedule);
+
+        // Only the first activation sets the status. A late re-delivery must
+        // not revive a subscription that has since been canceled or paused.
+        if ($activating) {
+            $trialing       = isset($schedule['trial_ends_at']) && strtotime($schedule['trial_ends_at']) > time();
+            $args['status'] = $trialing ? 'trialing' : 'active';
+        }
+
+        $subscription = $this->sync($subscription, $args);
+
+        // Activation event, as FluentCart's own gateways dispatch it: once, on the
+        // pending -> active move.
+        if ($activating) {
+            (new SubscriptionActivated($subscription, $subscription->order, $subscription->customer))->dispatch();
+        }
+
+        return $subscription;
     }
 
     public function update(SubscriptionInterface $subscription, UpdateSubscriptionData $data): SubscriptionInterface
@@ -105,24 +134,29 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
         ], fn ($v) => $v !== null);
 
         if ($data->clearEndsAt) {
-            // Resume: clear both the cancellation timestamp and the grace-end
-            // date so FluentCart treats the subscription as actively renewing.
+            // Resume: active again, renewing on Vatly's schedule.
             $dirty['canceled_at'] = null;
-            $dirty['expire_at']   = null;
             $dirty['status']      = 'active';
+            $dirty = array_merge($dirty, $this->billingScheduleFrom(
+                $this->fetchVatlySubscription((string) $row->vendor_subscription_id)
+            ));
         } elseif ($data->endsAt !== null) {
-            // Cancel: stamp the cancellation now, and let `expire_at` carry
-            // the access end-date that Vatly returned. For immediate
-            // cancellation the end-date is now; for grace-period cancellation
-            // it's in the future and FluentCart will continue to grant access
-            // until then.
-            $dirty['canceled_at'] = (new DateTimeImmutable())->format('Y-m-d H:i:s');
-            $dirty['expire_at']   = $data->endsAt->format('Y-m-d H:i:s');
-            $dirty['status']      = 'canceled';
+            // Cancel: FluentCart keeps a canceled subscription's access until
+            // `next_billing_date` and expires it after that, so that column
+            // carries Vatly's end date (now for an immediate cancellation, the
+            // period end for a grace-period one).
+            // While FluentCart itself is cancelling it (admin or customer
+            // portal), that request sets the status and fires the cancel
+            // event; this webhook only records the end date.
+            if (! get_transient(VatlySubscriptions::cancelInFlightKey((int) ($row->id ?? 0)))) {
+                $dirty['status'] = 'canceled';
+            }
+            $dirty['canceled_at']       = $row->canceled_at ?: (new DateTimeImmutable())->format('Y-m-d H:i:s');
+            $dirty['next_billing_date'] = $data->endsAt->format('Y-m-d H:i:s');
         }
 
         if ($dirty !== []) {
-            $this->saveSuppressingOutbound($row, $dirty);
+            $row = $this->sync($row, $dirty);
         }
 
         // Persist Vatly's cancellation reason alongside the end date so the
@@ -143,7 +177,7 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
      * {@see \Vatly\FluentCart\Support\SubscriptionBillingBackfill}): re-fetch
      * the Vatly subscription for an already-linked FluentCart row and fill in
      * billing-schedule columns an older build of store() left null. Reuses the
-     * same fetch + mapping + loop-guarded save as store(), so the date mapping
+     * same fetch + mapping + state sync as store(), so the date mapping
      * lives in one place. Returns true when the row was updated, false when
      * there's no Vatly id to resolve or Vatly reports no dates yet.
      */
@@ -159,22 +193,19 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
             return false;
         }
 
-        $this->saveSuppressingOutbound($row, $schedule);
+        $this->sync($row, $schedule);
 
         return true;
     }
 
     /**
-     * @param array<string, mixed> $dirty
+     * Write through FluentCart's own state sync so its subscription hooks fire.
+     *
+     * @param array<string, mixed> $args
      */
-    private function saveSuppressingOutbound(Subscription $row, array $dirty): void
+    private function sync(Subscription $row, array $args): Subscription
     {
-        self::$suppressOutboundCancel = true;
-        try {
-            $row->fill($dirty)->save();
-        } finally {
-            self::$suppressOutboundCancel = false;
-        }
+        return SubscriptionService::syncSubscriptionStates($row, $args) ?? $row;
     }
 
     /**
@@ -182,10 +213,12 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
      * `fluentcart_subscription_id` we stamped in metadata and to back-fill the
      * billing schedule onto the FluentCart row.
      */
-    private function fetchVatlySubscription(string $vatlySubscriptionId): ?object
+    private function fetchVatlySubscription(string $vatlySubscriptionId, ?bool $testmode = null): ?object
     {
         try {
-            return $this->plugin->vatly()->getSubscription()->execute($vatlySubscriptionId);
+            $vatly = $testmode === null ? $this->plugin->vatly() : $this->plugin->vatlyForTestmode($testmode);
+
+            return $vatly->getSubscription()->execute($vatlySubscriptionId);
         } catch (Throwable $e) {
             error_log('[vatly-for-fluentcart] failed to fetch Vatly subscription: ' . $e->getMessage());
             return null;
@@ -241,7 +274,7 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
 
     /**
      * Normalise a Vatly ISO-8601 timestamp to FluentCart's `Y-m-d H:i:s`
-     * datetime column format (mirrors the cancel path's handling of expire_at).
+     * datetime column format.
      * Returns null for empty/unparseable input so the caller leaves the column
      * untouched.
      *
@@ -254,7 +287,7 @@ final class FluentCartSubscriptionRepository implements SubscriptionRepositoryIn
         }
 
         try {
-            return (new DateTimeImmutable((string) $value))->format('Y-m-d H:i:s');
+            return (new DateTimeImmutable((string) $value))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
         } catch (Throwable $e) {
             return null;
         }

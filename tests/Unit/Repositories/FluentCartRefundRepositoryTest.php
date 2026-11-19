@@ -248,6 +248,35 @@ class FluentCartRefundRepositoryTest extends TestCase
         $this->assertHookExpectations();
     }
 
+    public function test_update_completes_the_refund_through_fluentcart_so_its_refund_event_fires(): void
+    {
+        // A pending refund recorded at initiation, linked to charge 1. When
+        // refund.completed arrives, FluentCart's createOrRecordRefund must make
+        // the transition (it recounts totals and fires OrderRefund); the row
+        // is never written directly, and the net total is kept, not the gross.
+        $row = Mockery::mock(OrderTransaction::class);
+        $row->shouldNotReceive('fill');
+        $row->vendor_charge_id = 'refund_1';
+        $row->total            = 1000;
+        $row->meta             = ['parent_id' => 1];
+
+        $charge     = new OrderTransaction();
+        $charge->id = 1;
+        Builder::$nextResults = [$charge];
+
+        (new FluentCartRefundRepository())->update(
+            new FluentCartRefund($row),
+            new UpdateRefundData(status: 'refunded', total: 1210, currency: 'EUR'),
+        );
+
+        self::assertNotNull(Refund::$lastRecorded);
+        [$args, $parent] = Refund::$lastRecorded;
+        self::assertSame($charge, $parent);
+        self::assertSame('refund_1', $args['vendor_charge_id']);
+        self::assertSame('refunded', $args['status']);
+        self::assertSame(1000, $args['total']);
+    }
+
     public function test_update_with_no_changes_does_not_touch_the_row(): void
     {
         $row = Mockery::mock(OrderTransaction::class);

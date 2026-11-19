@@ -10,7 +10,6 @@ use Vatly\Fluent\Wiring;
 use Vatly\FluentCart\Admin\ProductMetaBox;
 use Vatly\FluentCart\Config\VatlyConfig;
 use Vatly\FluentCart\Customer\FluentCartCustomerBindings;
-use Vatly\FluentCart\PaymentMethod\SubscriptionService;
 use Vatly\FluentCart\PaymentMethod\VatlyGateway;
 use Vatly\FluentCart\Repositories\FluentCartOrderRepository;
 use Vatly\FluentCart\Repositories\FluentCartRefundRepository;
@@ -71,13 +70,13 @@ final class Plugin
         $this->booted = true;
 
         add_action('fluent_cart/register_payment_methods', [$this, 'registerGateway']);
-        add_action('fluent_cart/payments/subscription_canceled', [$this, 'propagateCancellation'], 10, 1);
 
         // Schema upgrades + their background data migrations. Wired on every
         // request (not admin-only): the version gate early-returns once stamped,
         // and the migration's cron hook must be attached in the hook-less
         // wp-cron context where the batch runner actually fires.
         SubscriptionBillingBackfill::register();
+        WebhookCallRepository::registerPruning();
         (new Upgrader())->maybeUpgrade();
 
         (new SubscriptionController($this))->register();
@@ -145,36 +144,6 @@ final class Plugin
             VATLY_FLUENTCART_GATEWAY_SLUG,
             new VatlyGateway($this)
         );
-    }
-
-    /**
-     * FluentCart admin -> Vatly: propagate merchant-initiated cancellations.
-     *
-     * FluentCart's `fluent_cart/payments/subscription_canceled` hook passes a
-     * data array containing the subscription, order, customer models plus
-     * old_status / new_status — not a bare Subscription model.
-     *
-     * The same hook also fires when fluent's built-in CancelSubscriptionOnCanceled
-     * reaction (driven by an inbound subscription.canceled_* webhook) flips
-     * status to "canceled" through our FluentCartSubscriptionRepository::update.
-     * To avoid a Vatly→FluentCart→Vatly cancellation loop, the repository sets
-     * {@see FluentCartSubscriptionRepository::$suppressOutboundCancel} for the
-     * duration of its save, and this listener short-circuits when the flag is set.
-     *
-     * @param array<string, mixed> $data
-     */
-    public function propagateCancellation(array $data): void
-    {
-        if (FluentCartSubscriptionRepository::$suppressOutboundCancel) {
-            return;
-        }
-
-        $subscription = $data['subscription'] ?? null;
-        if (! is_object($subscription) || ($subscription->current_payment_method ?? null) !== 'vatly') {
-            return;
-        }
-
-        (new SubscriptionService($this))->cancel($subscription);
     }
 
     public function config(): VatlyConfig
