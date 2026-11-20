@@ -92,6 +92,16 @@ Vatly's refund API is asynchronous: the FluentCart refund is recorded with Vatly
 
 Each FluentCart transaction freezes its mode (test/live) at checkout. Refunds and any other operation on an existing record use the Vatly API key for **that record's** mode, not the current gateway toggle. So switching the gateway between test and live never makes an old test order's refund hit the live key; new checkouts use the current setting. The mode is exposed per record via `isTestmode()` on the Vatly order / subscription / refund wrappers.
 
+## Data the plugin stores
+
+For your records of processing and for access and deletion requests:
+
+- **Settings:** your Vatly API keys and webhook secrets, encrypted, in FluentCart's settings.
+- **Customer links:** the table `{prefix}vatly_customer_bindings` maps each Vatly customer ID to its FluentCart customer ID. It holds no names or contact details.
+- **Webhook log:** the table `{prefix}vatly_webhook_calls` keeps each webhook Vatly sends, for debugging. Personal fields (customer name, email, address, tax ID, payment method details) are removed before it is stored; what remains is the event's IDs, statuses, amounts, tax and order lines. Entries are deleted after 30 days. Change that with the `vatly_fluentcart_webhook_log_retention_days` filter, for example `add_filter('vatly_fluentcart_webhook_log_retention_days', fn () => 7);`.
+
+Orders, subscriptions and transactions are FluentCart's own records. Deleting the plugin removes both tables, its settings and its scheduled jobs, and leaves those records in place.
+
 ## Development
 
 ```bash

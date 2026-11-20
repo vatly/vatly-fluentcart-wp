@@ -28,11 +28,28 @@ final class IPN
             return;
         }
 
+        // Building the Vatly client throws without an API key, which used to
+        // surface as a bare 500 on every call. Say what is missing instead.
+        if ($this->plugin->config()->getApiKey() === '') {
+            $this->respond(503, ['error' => 'api_key_not_configured']);
+            return;
+        }
+
         $payload = file_get_contents('php://input') ?: '';
         $signature = $this->signatureHeader();
 
         try {
-            $this->plugin->webhookProcessor()->handle($payload, $signature);
+            $processor = $this->plugin->webhookProcessor();
+        } catch (\Throwable) {
+            // The client rejects a malformed key the same way. Its message
+            // repeats the key, so it is not logged.
+            error_log('[vatly-for-fluentcart] webhook refused: the Vatly API key in the settings is not valid.');
+            $this->respond(503, ['error' => 'api_key_invalid']);
+            return;
+        }
+
+        try {
+            $processor->handle($payload, $signature);
         } catch (InvalidWebhookSignatureException) {
             $this->respond(401, ['error' => 'invalid_signature']);
             return;

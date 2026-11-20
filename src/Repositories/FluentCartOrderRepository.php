@@ -9,6 +9,7 @@ use FluentCart\App\Helpers\StatusHelper;
 use FluentCart\App\Models\OrderTransaction;
 use FluentCart\App\Models\Subscription;
 use FluentCart\App\Modules\Subscriptions\Services\SubscriptionService;
+use RuntimeException;
 use Throwable;
 use Vatly\API\Types\OrderStatus;
 use Vatly\API\Resources\Order;
@@ -73,10 +74,14 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->confirmInitialPayment($data, (string) $webhookMetadata['fluentcart_transaction_id']);
         }
 
-        // No usable transaction id on the webhook. Fetch the full Vatly order:
-        // the renewal / claim-back paths below attribute by the order's
-        // line-level subscription link, which needs the order resource, not
-        // just its metadata.
+        // A renewal: the signed event's own lines link the subscription, so no
+        // API lookup or customer binding is needed (guest checkouts have none).
+        if (LinkedSubscription::vatlySubscriptionId($data->lines) !== null) {
+            return $this->recordRenewal($data, null);
+        }
+
+        // No transaction id and no line link on the webhook (a webhook stored
+        // before Vatly sent lines). Fetch the full Vatly order.
         $vatlyOrder = $this->fetchVatlyOrder($data->vatlyId);
         $metadata   = $this->metadataOf($vatlyOrder);
 
@@ -126,8 +131,19 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             return $this->recordRenewal($data, $vatlyOrder);
         }
 
-        // Fall-through: a paid Vatly order we can't route — log and return a
-        // synthetic wrapper so the built-in reaction doesn't blow up.
+        // The lookup failed, so this paid order may well be ours: fail the
+        // webhook so Vatly redelivers it, instead of acknowledging a payment
+        // that was never booked.
+        if ($vatlyOrder === null) {
+            throw new RuntimeException(esc_html(sprintf(
+                '[vatly-for-fluentcart] order.paid %s: could not load the Vatly order to route it; Vatly will retry',
+                $data->vatlyId,
+            )));
+        }
+
+        // Fall-through: a paid Vatly order we can't route (an order from another
+        // system) — log and return a synthetic wrapper so the built-in reaction
+        // doesn't blow up.
         error_log(sprintf(
             '[vatly-for-fluentcart] order.paid %s: no fluentcart_transaction_id metadata and no host customer binding — skipping',
             $data->vatlyId,
@@ -229,7 +245,8 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
 
         // The order's lines name the subscription exactly. When they do, never
         // fall back to a different subscription of the same customer.
-        $linked = $vatlyOrder !== null ? LinkedSubscription::forOrder($vatlyOrder) : null;
+        $linked = LinkedSubscription::forLines($data->lines)
+            ?? ($vatlyOrder !== null ? LinkedSubscription::forOrder($vatlyOrder) : null);
         if ($linked !== null && ! in_array((string) $linked->status, $renewableStatuses, true)) {
             error_log(sprintf(
                 '[vatly-for-fluentcart] renewal order.paid %s: linked subscription %d is %s, not renewable — skipping',
@@ -287,10 +304,15 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         if ($nextRenewal === null && ! is_wp_error($recorded)) {
             // Vatly's date was unavailable: derive it from the renewal just
             // recorded, the way FluentCart does, so the subscription can't expire.
+            // Never move it earlier than the date it already had.
             $subscription->refresh();
-            SubscriptionService::syncSubscriptionStates($subscription, [
-                'next_billing_date' => $subscription->guessNextBillingDate(true),
-            ]);
+            $guessed = (string) $subscription->guessNextBillingDate(true);
+            $current = (string) ($subscription->next_billing_date ?? '');
+            if ($current === '' || strtotime($guessed) > strtotime($current)) {
+                SubscriptionService::syncSubscriptionStates($subscription, [
+                    'next_billing_date' => $guessed,
+                ]);
+            }
         }
 
         $renewalTransaction = OrderTransaction::query()

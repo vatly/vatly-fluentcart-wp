@@ -42,4 +42,27 @@ final class IPNTest extends TestCase
 
         self::assertSame([503, ['error' => 'webhook_secret_not_configured']], $sent);
     }
+
+    public function test_says_the_api_key_is_missing_instead_of_failing_every_webhook(): void
+    {
+        $GLOBALS['fluent_cart_options'][\Vatly\FluentCart\PaymentMethod\VatlySettings::METHOD_HANDLER] = [
+            'test_webhook_secret' => 'whsec',
+        ];
+
+        $ref    = new \ReflectionClass(Plugin::class);
+        $plugin = $ref->newInstanceWithoutConstructor();
+        $config = $ref->getProperty('config');
+        $config->setAccessible(true);
+        $config->setValue($plugin, new VatlyConfig());
+
+        $sent = null;
+        Functions\when('status_header')->justReturn(null);
+        Functions\when('wp_send_json')->alias(static function ($body, $status) use (&$sent): void {
+            $sent = [$status, $body];
+        });
+
+        (new IPN($plugin))->handle();
+
+        self::assertSame([503, ['error' => 'api_key_not_configured']], $sent);
+    }
 }
