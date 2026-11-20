@@ -54,6 +54,24 @@ class WebhookCallRepositoryIntegrationTest extends WP_UnitTestCase
         self::assertSame(['customerId' => 'cus_test'], json_decode($row['object'], true));
     }
 
+    public function test_record_never_stores_the_customers_personal_fields(): void
+    {
+        $this->record('evt_pii', 'order.paid', objectOverride: [
+            'id'              => 'order_1',
+            'status'          => 'paid',
+            'customerDetails' => ['email' => 'erin@example.com', 'fullName' => 'Erin Tester'],
+            'billingAddress'  => ['streetAndNumber' => 'Keizersgracht 1'],
+            'mandate'         => ['maskedIdentifier' => '4242'],
+        ]);
+
+        global $wpdb;
+        $object = $wpdb->get_var( // phpcs:ignore WordPress.DB
+            $wpdb->prepare('SELECT object FROM ' . WebhookCallRepository::tableName() . ' WHERE vatly_id = %s', 'evt_pii')
+        );
+
+        self::assertSame(['id' => 'order_1', 'status' => 'paid'], json_decode((string) $object, true));
+    }
+
     public function test_record_uses_replace_so_duplicate_vatly_id_overwrites(): void
     {
         // record() uses $wpdb->replace, which is REPLACE INTO — duplicate

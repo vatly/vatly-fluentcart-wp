@@ -20,12 +20,19 @@ final class WebhookCallRepository implements WebhookCallRepositoryInterface
     public const PRUNE_HOOK = 'vatly_fluentcart_prune_webhook_calls';
 
     /**
-     * Days a logged webhook is kept. The log holds Vatly's full event JSON,
-     * customer name and address included, and nothing reads it back, so it is
-     * kept only as long as it helps debugging. Filter:
+     * Days a logged webhook is kept. The log holds Vatly's event JSON without
+     * its personal fields, and nothing reads it back, so it is kept only as
+     * long as it helps debugging. Filter:
      * `vatly_fluentcart_webhook_log_retention_days`.
      */
     public const RETENTION_DAYS = 30;
+
+    /**
+     * Fields of Vatly's event object that hold personal data (name, email,
+     * address, tax ID, payment method details). Nothing in the plugin reads
+     * them from the log, so they are never stored.
+     */
+    public const PERSONAL_FIELDS = ['customerDetails', 'billingAddress', 'shippingAddress', 'mandate'];
 
     public static function registerPruning(): void
     {
@@ -63,7 +70,7 @@ final class WebhookCallRepository implements WebhookCallRepositoryInterface
                 'testmode'           => $testmode ? 1 : 0,
                 'vatly_created_at'   => $createdAt->format('Y-m-d H:i:s'),
                 'vatly_customer_id'  => $vatlyCustomerId,
-                'object'             => (string) wp_json_encode($object),
+                'object'             => (string) wp_json_encode(array_diff_key($object, array_flip(self::PERSONAL_FIELDS))),
                 'created_at'         => current_time('mysql', true),
             ],
             ['%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s'],

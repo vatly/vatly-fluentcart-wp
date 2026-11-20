@@ -81,6 +81,84 @@ class FluentCartOrderRepositoryTest extends TestCase
         self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
     }
 
+    public function test_a_renewal_is_routed_by_the_events_own_lines_when_the_order_lookup_fails(): void
+    {
+        // A guest's renewal (no customer binding) while the Vatly API is
+        // unreachable: the signed event's lines still name the subscription.
+        // Vatly's next renewal date can't be read either, and the fallback
+        // guess must not move an already later billing date back.
+        $linked = $this->subscription(12, 'active');
+        $linked->next_billing_date = '2199-01-01 00:00:00';
+        Builder::$nextResults = [$linked, $this->renewalTransaction()];
+
+        (new FluentCartOrderRepository($this->pluginWhoseOrderLookupFails()))->store(new StoreOrderData(
+            vatlyId:  'order_renewal_1',
+            customerId: 'customer_1',
+            status:   'paid',
+            total:    2420,
+            currency: 'EUR',
+            testmode: false,
+            subtotal: 2000,
+            lines:    [$this->linkedLine('subscription_B')],
+        ));
+
+        self::assertSame($linked, SubscriptionService::$lastRecorded[0] ?? null);
+        self::assertSame(2000, SubscriptionService::$lastRecorded[1]['total'] ?? null);
+        self::assertSame('2199-01-01 00:00:00', $linked->next_billing_date);
+        self::assertContains(['vendor_subscription_id', 'subscription_B'], Builder::$wheres);
+    }
+
+    public function test_a_paid_order_that_cannot_be_routed_because_the_lookup_failed_fails_the_webhook(): void
+    {
+        // Acknowledging it would stop Vatly retrying a payment that was never
+        // booked; the 500 this causes makes Vatly redeliver later.
+        Functions\when('error_log')->justReturn(true);
+        $this->expectException(\RuntimeException::class);
+
+        (new FluentCartOrderRepository($this->pluginWhoseOrderLookupFails()))->store(new StoreOrderData(
+            vatlyId:  'order_renewal_1',
+            customerId: 'customer_1',
+            status:   'paid',
+            total:    2420,
+            currency: 'EUR',
+            testmode: false,
+        ));
+    }
+
+    private function pluginWhoseOrderLookupFails(): Plugin
+    {
+        $plugin   = $this->pluginReturningOrder($this->vatlyOrder('order_renewal_1', []));
+        $getOrder = Mockery::mock(\Vatly\Fluent\Actions\GetOrder::class);
+        $getOrder->shouldReceive('execute')->andThrow(new \RuntimeException('Unauthorized'));
+        $vatly = Mockery::mock(\Vatly\Fluent\Vatly::class);
+        $vatly->shouldReceive('getOrder')->andReturn($getOrder);
+        $vatly->shouldReceive('getSubscription')->andThrow(new \RuntimeException('Unauthorized'));
+
+        $ref = new \ReflectionClass(Plugin::class);
+        foreach (['vatly' => $vatly, 'vatlyByMode' => [0 => $vatly, 1 => $vatly]] as $name => $value) {
+            $property = $ref->getProperty($name);
+            $property->setAccessible(true);
+            $property->setValue($plugin, $value);
+        }
+
+        return $plugin;
+    }
+
+    private function linkedLine(string $vatlySubscriptionId): \Vatly\API\Types\OrderLineData
+    {
+        return new \Vatly\API\Types\OrderLineData(
+            vatlyId: 'orderline_1',
+            description: 'Pro plan',
+            quantity: 1,
+            basePrice: new \Vatly\API\Types\Money('EUR', '20.00'),
+            total: new \Vatly\API\Types\Money('EUR', '24.20'),
+            subtotal: new \Vatly\API\Types\Money('EUR', '20.00'),
+            productType: 'subscription_plan',
+            productId: 'subscription_plan_1',
+            relatedResources: new \Vatly\API\Types\OrderLineRelatedResources($vatlySubscriptionId),
+        );
+    }
+
     public function test_renewal_falls_back_to_the_customers_newest_subscription_without_a_link(): void
     {
         // A line from before Vatly shipped the link carries no relatedResources.
