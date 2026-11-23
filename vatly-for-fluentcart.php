@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       Vatly for FluentCart
- * Plugin URI:        https://vatly.com/integrations/fluentcart
+ * Plugin URI:        https://docs.vatly.com/packages/fluentcart/readme
  * Description:       Accept payments through Vatly, the European Merchant of Record for AI, software and digital products, inside FluentCart.
  * Version:           0.1.3-alpha
  * Requires at least: 6.2
@@ -24,14 +24,17 @@ define('VATLY_FLUENTCART_DIR', plugin_dir_path(__FILE__));
 define('VATLY_FLUENTCART_URL', plugin_dir_url(__FILE__));
 define('VATLY_FLUENTCART_GATEWAY_SLUG', 'vatly');
 
+// The release zip ships its own vendor/. A Composer-managed site (such as
+// Bedrock) autoloads the plugin and its dependencies from the site's vendor/.
 $autoload = __DIR__ . '/vendor/autoload.php';
-if (! is_file($autoload)) {
+if (is_file($autoload)) {
+    require $autoload;
+} elseif (! class_exists(\Vatly\FluentCart\Plugin::class)) {
     add_action('admin_notices', static function (): void {
-        echo '<div class="notice notice-error"><p><strong>Vatly for FluentCart:</strong> Composer dependencies are missing. Run <code>composer install</code> inside the plugin directory.</p></div>';
+        echo '<div class="notice notice-error"><p><strong>Vatly for FluentCart:</strong> Composer dependencies are missing. Run <code>composer install</code> inside the plugin directory, or install the plugin with Composer at the site level.</p></div>';
     });
     return;
 }
-require $autoload;
 
 register_activation_hook(__FILE__, [\Vatly\FluentCart\Support\Install::class, 'activate']);
 
