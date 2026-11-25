@@ -2,24 +2,35 @@
 
 # Vatly for FluentCart
 
-Accept payments through **Vatly**, the European Merchant of Record for AI, software and digital products, directly inside [FluentCart](https://fluentcart.com). Vatly is the legal seller on every sale and handles payments, tax and compliance.
-
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 ![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777bb4.svg)
 ![WordPress 6.2+](https://img.shields.io/badge/WordPress-6.2%2B-21759b.svg)
+[![Packagist](https://img.shields.io/packagist/v/vatly/vatly-fluentcart?include_prereleases)](https://packagist.org/packages/vatly/vatly-fluentcart)
+
+> Sell from your FluentCart store without becoming a tax expert. Vatly is the
+> European Merchant of Record for AI, software and digital products: it is the
+> legal seller on every sale, charges the right VAT or sales tax for each
+> customer's country, issues the invoice, and carries the compliance burden.
+
+A WordPress plugin that adds **Vatly** as a payment gateway to
+[FluentCart](https://fluentcart.com). Full documentation:
+[docs.vatly.com/packages/fluentcart](https://docs.vatly.com/packages/fluentcart/readme).
 
 > [!WARNING]
-> **Alpha.** The plugin works end to end with Vatly test mode on FluentCart 2.3, but it can still change. Try it in Vatly test mode before you take live payments with it.
+> **Alpha.** The plugin works end to end with Vatly test mode on FluentCart 2.3, but it can still change in ways that need you to update your setup. Try it in Vatly test mode before you take live payments with it.
 
-When you sell through Vatly, **Vatly is the Merchant of Record**: it charges the correct VAT/sales tax for each country, issues the legally valid invoice, and carries the compliance burden. This plugin registers Vatly as a FluentCart payment gateway and keeps the two in sync: surfacing Vatly's official invoices in FluentCart, routing refunds back through Vatly, and supporting both one-off and subscription products.
+## Why
 
-## Features
+Selling digital products across borders means VAT registration, the right rate
+for every country, compliant invoices and credit notes, and refunds that keep
+the tax records straight. With Vatly as the Merchant of Record, that is
+Vatly's job, not yours:
 
-- **Merchant-of-Record checkout** for one-off products and subscriptions, including free trials carried over from FluentCart.
-- **Official Vatly invoices** shown on the FluentCart receipt and available as shortcodes, while FluentCart's own competing receipt/invoice is automatically suppressed for Vatly orders, so customers never receive two invoices for one purchase.
-- **Refunds routed through Vatly**, so the credit note and its VAT are issued by the Merchant of Record and recorded back onto the FluentCart order.
-- **FluentCart's own events** for every payment and subscription change, including renewals, failed payments, refunds, cancellations and chargebacks, so other plugins that listen to FluentCart keep working.
-- **Per-record test/live mode**, frozen at checkout, so refunds and other follow-up calls always use the API key that matches the original order.
+- **Checkout for one-off products and subscriptions**, including free trials carried over from FluentCart, so the first charge lands after the trial.
+- **One official invoice per purchase.** Vatly's invoice is shown on the FluentCart receipt and available as shortcodes. FluentCart's own competing receipt and invoice are suppressed for Vatly orders, so customers never get two invoices for one purchase.
+- **Refunds routed through Vatly**, so Vatly issues the credit note and its VAT, and the result is recorded on the FluentCart order.
+- **FluentCart keeps working as before.** The plugin fires FluentCart's own events for every payment and subscription change, including renewals, failed payments, refunds, cancellations and chargebacks, so other plugins that listen to FluentCart keep working.
+- **Test and live mode per record.** Each order keeps the mode it had at checkout, so a refund always uses the matching API key.
 
 ## Requirements
 
@@ -28,40 +39,48 @@ When you sell through Vatly, **Vatly is the Merchant of Record**: it charges the
 - [FluentCart](https://fluentcart.com) 2.3 or newer, installed and active
 - A [Vatly](https://vatly.com) account with API credentials
 
-## Installation
+## Quick start
 
-### From a release zip
+### 1. Install
 
-1. Download the zip from the [latest alpha release](https://github.com/vatly/vatly-fluentcart-wp/releases/latest). Each release is built by CI and bundles a conflict-safe, namespace-scoped copy of the dependencies, so you don't need Composer.
+**From a release zip** (recommended for most sites):
+
+1. Download the zip from the [latest release](https://github.com/vatly/vatly-fluentcart-wp/releases/latest). It bundles a namespace-scoped copy of the dependencies, so you don't need Composer and it can't clash with other plugins.
 2. In WordPress, go to **Plugins → Add New → Upload Plugin**, choose the zip, and **Activate**.
 
-> Prefer to build it yourself? `bin/build-release.sh` produces `build/vatly-for-fluentcart.zip` locally (requires PHP, Composer, curl, and zip).
-
-### With Composer (for development)
+**With Composer** (for sites that manage plugins with Composer, such as Bedrock with `composer/installers`). The dependencies are alpha releases, so allow alpha packages first:
 
 ```bash
-git clone https://github.com/vatly/vatly-fluentcart-wp.git
-cd vatly-fluentcart-wp
-composer install
+composer config minimum-stability alpha
+composer config prefer-stable true
+composer require vatly/vatly-fluentcart
 ```
 
-Place (or symlink) the directory in `wp-content/plugins/` and activate it from the Plugins screen.
+The plugin installs as `vatly-for-fluentcart`, the same directory name the zip uses, and loads its dependencies through your site's Composer autoloader. Activate it from the Plugins screen.
 
-## Setup
+### 2. Connect Vatly
 
-1. **Add your API credentials.** Go to **FluentCart → Settings → Payment Methods → Vatly**, choose **Test** or **Live** mode, and paste the matching **API key** and **Webhook secret** from your Vatly dashboard.
+1. **Add your API credentials.** Go to **FluentCart → Settings → Payment Methods → Vatly**, choose **Test** or **Live** mode, and paste the matching **API key** and **Webhook secret** from the **Developers** section of your Vatly dashboard.
+2. **Register the webhook in Vatly.** Under **Developers** in the Vatly dashboard, add a webhook endpoint pointing at:
 
-2. **Register the webhook in Vatly.** In the Vatly dashboard, add a webhook endpoint pointing at:
-   ```
+   ```text
    https://your-site.com/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook
    ```
-   Use the same webhook secret you entered above. Vatly's `order.paid` webhook is what stamps the official invoice onto each order.
 
-3. **Map your products to Vatly.** Edit a FluentCart product and fill in the **Vatly mapping** box with the IDs from your Vatly dashboard:
-   - **Vatly product ID**: the `one_off_product_…` id, for one-time products.
-   - **Vatly plan ID**: the `subscription_plan_…` id, for subscription products.
+   Use the same webhook secret you entered above. Until a secret is saved for the current mode, the endpoint answers `503` and processes nothing; Vatly retries the delivery once it is saved.
 
-   Set the id that matches how the product is sold. A checkout fails with a clear error if the product it's selling has no matching Vatly id.
+### 3. Map your products
+
+Edit a FluentCart product and fill in the **Vatly mapping** box with the IDs from **Manage Products** in your Vatly dashboard:
+
+- **Vatly product ID**: the `one_off_product_…` ID, for one-time products.
+- **Vatly plan ID**: the `subscription_plan_…` ID, for subscription products.
+
+A checkout fails with a clear error when the product it sells has no matching Vatly ID. Run a test purchase in Vatly test mode before you switch to live.
+
+### Building from source
+
+`bin/build-release.sh` builds `build/vatly-for-fluentcart.zip` locally (requires PHP, Composer, curl and zip). For development, clone the repository, run `composer install`, and place or symlink the directory in `wp-content/plugins/`.
 
 ## Merchant-of-Record invoicing
 
