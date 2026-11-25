@@ -1,5 +1,5 @@
 {
-    "name": "vatly/vatly-for-fluentcart",
+    "name": "vatly/vatly-fluentcart",
     "description": "FluentCart payment gateway for Vatly, the European Merchant of Record for AI, software and digital products",
     "keywords": ["vatly", "wordpress", "wordpress-plugin", "fluentcart", "payment-gateway", "merchant-of-record", "vat", "eu-vat", "ai"],
     "type": "wordpress-plugin",
@@ -55,5 +55,8 @@
         }
     },
     "minimum-stability": "dev",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "extra": {
+        "installer-name": "vatly-for-fluentcart"
+    }
 }

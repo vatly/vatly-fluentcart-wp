@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "50fb6322736c46e8e6a5ba1a088ed8a4",
+    "content-hash": "dbd617b9d8ddf8f5975885187ed8f4a7",
     "packages": [
         {
             "name": "composer/ca-bundle",
@@ -1363,7 +1363,8 @@
                     "type": "github"
                 }
             ],
-            "time": "2026-05-28T14:44:12+00:00"
+            "time": "2026-05-28T14:44:12+00:00",
+            "published-time": "2026-05-28T14:44:28+00:00"
         },
         {
             "name": "phpunit/php-code-coverage",
