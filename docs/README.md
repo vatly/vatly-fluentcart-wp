@@ -36,7 +36,7 @@ If your site manages its plugins with Composer, such as a Bedrock site with `com
 ```bash
 composer config minimum-stability alpha
 composer config prefer-stable true
-composer require vatly/vatly-for-fluentcart
+composer require vatly/vatly-fluentcart
 ```
 
 The plugin installs as `vatly-for-fluentcart` in your plugins directory, the same name the zip uses. Its dependencies load through your site's Composer autoloader, which Bedrock includes. Then activate the plugin in WordPress.
