@@ -111,9 +111,10 @@ final class HandleChargebackReversed implements WebhookReactionInterface
             }
         }
 
-        $sub = LinkedSubscription::forOrder($vatlyOrder);
-        if ($sub !== null) {
-            return $sub;
+        // When a line names the subscription, never fall back to a different one.
+        $linkedId = LinkedSubscription::vatlySubscriptionId($vatlyOrder->lines());
+        if ($linkedId !== null) {
+            return LinkedSubscription::find($linkedId);
         }
 
         $vatlyCustomerId = (string) ($vatlyOrder->customerId ?? '');

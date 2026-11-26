@@ -549,7 +549,7 @@ final class MockVatly
         // Deliver refund.completed AFTER this API response (see handle()), the
         // way Vatly delivers it out of band, so the gateway has recorded its
         // local refund row before the credit-note reaction runs.
-        $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
+        $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://localhost/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
         $this->defer_webhook($webhook_url, 'refund.completed', $refund, 'refund', $refundId);
 
         return $refund;
@@ -630,7 +630,7 @@ final class MockVatly
             );
             $this->store('orders', $checkout['orderId'], $order);
 
-            $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
+            $webhook_url = getenv('VATLY_WEBHOOK_URL') ?: 'http://localhost/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook';
 
             // Only a subscription checkout (a plan, not a one-off product)
             // emits subscription.started. Firing it for a one-off would be
@@ -700,7 +700,7 @@ final class MockVatly
     {
         $body = $this->json_body();
 
-        $target      = (string) ($body['url'] ?? (getenv('VATLY_WEBHOOK_URL') ?: 'http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook'));
+        $target      = (string) ($body['url'] ?? (getenv('VATLY_WEBHOOK_URL') ?: 'http://localhost/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook'));
         $entity_type = (string) ($body['entityType'] ?? 'subscription');
         $entity_id   = (string) ($body['entityId'] ?? 'subscription_dev');
         $object      = (array) ($body['object'] ?? []);

@@ -159,6 +159,47 @@ class FluentCartOrderRepositoryTest extends TestCase
         );
     }
 
+    public function test_a_renewal_linked_to_an_unknown_subscription_fails_the_webhook_instead_of_booking_the_customers_other_one(): void
+    {
+        // The customer is bound and has another renewable subscription, but
+        // the line names one FluentCart doesn't know. Booking the other one
+        // would charge the wrong product; the 500 makes Vatly redeliver.
+        $other = $this->subscription(30, 'active');
+        Builder::$nextResults = [null, $other];
+
+        try {
+            $this->storeRenewal(['subscriptionId' => 'subscription_unknown']);
+            self::fail('expected the webhook to fail');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('subscription_unknown', $e->getMessage());
+        }
+
+        self::assertNull(SubscriptionService::$lastRecorded);
+        self::assertContains(['vendor_subscription_id', 'subscription_unknown'], Builder::$wheres);
+        self::assertNotContains(['customer_id', '42'], Builder::$wheres);
+    }
+
+    public function test_a_guests_renewal_linked_to_an_unknown_subscription_fails_the_webhook(): void
+    {
+        // No customer binding: this used to answer 200 with nothing booked,
+        // so Vatly never redelivered it.
+        $this->expectException(\RuntimeException::class);
+
+        try {
+            (new FluentCartOrderRepository($this->pluginWhoseOrderLookupFails()))->store(new StoreOrderData(
+                vatlyId:  'order_renewal_1',
+                customerId: 'customer_1',
+                status:   'paid',
+                total:    2420,
+                currency: 'EUR',
+                testmode: false,
+                lines:    [$this->linkedLine('subscription_unknown')],
+            ));
+        } finally {
+            self::assertNull(SubscriptionService::$lastRecorded);
+        }
+    }
+
     public function test_renewal_falls_back_to_the_customers_newest_subscription_without_a_link(): void
     {
         // A line from before Vatly shipped the link carries no relatedResources.

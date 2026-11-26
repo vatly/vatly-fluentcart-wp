@@ -116,10 +116,13 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
         }
 
         // The order's lines name the subscription exactly. When they do, never
-        // fall back to a different subscription of the same customer.
-        $linked = $this->linkedSubscription($event);
-        if ($linked !== null) {
-            return in_array((string) $linked->status, self::DUNNABLE_STATUSES, true) ? $linked : null;
+        // fall back to a different subscription of the same customer, also
+        // when FluentCart doesn't know the linked one.
+        $linkedId = $this->linkedVatlySubscriptionId($event);
+        if ($linkedId !== null) {
+            $linked = LinkedSubscription::find($linkedId);
+
+            return $linked !== null && in_array((string) $linked->status, self::DUNNABLE_STATUSES, true) ? $linked : null;
         }
 
         $hostCustomerId = $this->bindings->hostCustomerIdFor($event->customerId);
@@ -135,10 +138,10 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
             ->first();
     }
 
-    private function linkedSubscription(OrderPaymentFailed $event): ?Subscription
+    private function linkedVatlySubscriptionId(OrderPaymentFailed $event): ?string
     {
         if ($event->lines !== []) {
-            return LinkedSubscription::forLines($event->lines);
+            return LinkedSubscription::vatlySubscriptionId($event->lines);
         }
 
         try {
@@ -148,6 +151,6 @@ final class HandlePaymentFailedOnDunning implements WebhookReactionInterface
             return null;
         }
 
-        return LinkedSubscription::forOrder($order);
+        return LinkedSubscription::vatlySubscriptionId($order->lines());
     }
 }
