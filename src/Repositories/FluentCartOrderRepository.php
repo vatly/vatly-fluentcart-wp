@@ -243,34 +243,52 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
         // unrecorded, the subscription stays stuck in `failing`).
         $renewableStatuses = ['active', 'trialing', 'failing', 'past_due'];
 
-        // The order's lines name the subscription exactly. When they do, never
-        // fall back to a different subscription of the same customer.
-        $linked = LinkedSubscription::forLines($data->lines)
-            ?? ($vatlyOrder !== null ? LinkedSubscription::forOrder($vatlyOrder) : null);
-        if ($linked !== null && ! in_array((string) $linked->status, $renewableStatuses, true)) {
-            error_log(sprintf(
-                '[vatly-for-fluentcart] renewal order.paid %s: linked subscription %d is %s, not renewable — skipping',
-                $data->vatlyId,
-                $linked->id,
-                (string) $linked->status,
-            ));
-            return $this->orphanWrapper($data);
-        }
+        // The order's lines name the subscription exactly. When they do, only
+        // that subscription can be booked: never fall back to a different
+        // subscription of the same customer. The customer's newest
+        // subscription is only a guess for lines with no link at all.
+        $linkedId = LinkedSubscription::vatlySubscriptionId($data->lines)
+            ?? ($vatlyOrder !== null ? LinkedSubscription::vatlySubscriptionId($vatlyOrder->lines()) : null);
 
-        $subscription = $linked ?? Subscription::query()
-            ->where('customer_id', $data->hostCustomerId)
-            ->where('current_payment_method', 'vatly')
-            ->whereIn('status', $renewableStatuses)
-            ->orderByDesc('id')
-            ->first();
+        if ($linkedId !== null) {
+            $subscription = LinkedSubscription::find($linkedId);
 
-        if (! $subscription) {
-            error_log(sprintf(
-                '[vatly-for-fluentcart] renewal order.paid %s: no active vatly subscription for host customer %s',
-                $data->vatlyId,
-                $data->hostCustomerId,
-            ));
-            return $this->orphanWrapper($data);
+            // A paid renewal for a subscription FluentCart doesn't know (yet):
+            // fail the webhook so Vatly redelivers it, as for any other paid
+            // order that can't be booked. The IPN logs the message.
+            if ($subscription === null) {
+                throw new RuntimeException(esc_html(sprintf(
+                    '[vatly-for-fluentcart] renewal order.paid %s: linked Vatly subscription %s is not known to FluentCart; Vatly will retry',
+                    $data->vatlyId,
+                    $linkedId,
+                )));
+            }
+
+            if (! in_array((string) $subscription->status, $renewableStatuses, true)) {
+                error_log(sprintf(
+                    '[vatly-for-fluentcart] renewal order.paid %s: linked subscription %d is %s, not renewable — skipping',
+                    $data->vatlyId,
+                    $subscription->id,
+                    (string) $subscription->status,
+                ));
+                return $this->orphanWrapper($data);
+            }
+        } else {
+            $subscription = Subscription::query()
+                ->where('customer_id', $data->hostCustomerId)
+                ->where('current_payment_method', 'vatly')
+                ->whereIn('status', $renewableStatuses)
+                ->orderByDesc('id')
+                ->first();
+
+            if (! $subscription) {
+                error_log(sprintf(
+                    '[vatly-for-fluentcart] renewal order.paid %s: no active vatly subscription for host customer %s',
+                    $data->vatlyId,
+                    $data->hostCustomerId,
+                ));
+                return $this->orphanWrapper($data);
+            }
         }
 
         // SubscriptionService::recordRenewalPayment creates the renewal order and

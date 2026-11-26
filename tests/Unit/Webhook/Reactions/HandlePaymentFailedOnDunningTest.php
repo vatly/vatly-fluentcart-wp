@@ -193,6 +193,28 @@ final class HandlePaymentFailedOnDunningTest extends TestCase
         self::assertSame('canceled', $linked->status);
     }
 
+    public function test_does_not_fall_back_to_another_subscription_when_the_linked_one_is_unknown(): void
+    {
+        // The line names a subscription FluentCart doesn't know. The
+        // customer's other subscription must not be put into dunning.
+        $other = new Subscription();
+        $other->id = 30;
+        $other->status = 'active';
+        $other->current_payment_method = 'vatly';
+
+        Builder::$nextResults = [null, $other];
+
+        $bindings = \Mockery::mock(CustomerBindingRepository::class);
+        $bindings->shouldNotReceive('hostCustomerIdFor');
+
+        Functions\expect('error_log')->once();
+        Actions\expectDone('fluent_cart/subscription_past_due')->never();
+
+        (new HandlePaymentFailedOnDunning($this->plugin('subscription_unknown'), $bindings))->handle($this->event());
+
+        self::assertSame('active', $other->status);
+    }
+
     public function test_flips_subscription_via_customer_binding_fallback(): void
     {
         // An order without a subscription link (from before Vatly shipped it):

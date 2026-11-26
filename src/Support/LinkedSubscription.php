@@ -21,7 +21,10 @@ use Vatly\API\Types\OrderLineData;
  *
  * The link is null on one-off lines, on orders from before Vatly shipped it,
  * and on an initial signup line until Vatly has created the subscription.
- * Callers fall back to their previous lookup when this returns null.
+ * Only then may a caller fall back to its older lookup (such as the
+ * customer's newest subscription). When a line names a subscription, that
+ * subscription is the only one a caller may act on: if it is not known
+ * locally, the caller must not pick a different one.
  */
 final class LinkedSubscription
 {
@@ -47,6 +50,15 @@ final class LinkedSubscription
             return null;
         }
 
+        return self::find($vatlySubscriptionId);
+    }
+
+    /**
+     * The local Vatly subscription with this Vatly subscription id, or null
+     * when FluentCart doesn't know it.
+     */
+    public static function find(string $vatlySubscriptionId): ?Subscription
+    {
         return Subscription::query()
             ->where('vendor_subscription_id', $vatlySubscriptionId)
             ->where('current_payment_method', 'vatly')

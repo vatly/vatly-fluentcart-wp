@@ -15,7 +15,7 @@ SITE_URL="${SITE_URL:-http://localhost:8080}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
-MOCK_VATLY="${MOCK_VATLY:-http://mock-vatly:8080}"
+MOCK_VATLY="${MOCK_VATLY:-http://localhost:8080}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-mock-secret-for-dev-only-do-not-use-in-prod}"
 
 cd /var/www/html

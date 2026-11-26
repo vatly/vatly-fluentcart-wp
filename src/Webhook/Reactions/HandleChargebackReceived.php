@@ -36,7 +36,8 @@ use Vatly\FluentCart\Support\LinkedSubscription;
  *      stamped at checkout time (initial payments only).
  *   3. The subscription the order's lines link to
  *      (`lines[].relatedResources.subscriptionId`).
- *   4. Final fallback: customer-binding → most-recent active subscription.
+ *   4. Only when no line carries a link: customer-binding → most-recent
+ *      active subscription.
  *
  * One-off orders have no subscription to pause; the booking and its
  * FluentCart event cover them.
@@ -135,10 +136,11 @@ final class HandleChargebackReceived implements WebhookReactionInterface
                 }
             }
 
-            // (3) The subscription the order's lines link to.
-            $sub = LinkedSubscription::forOrder($vatlyOrder);
-            if ($sub !== null) {
-                return $sub;
+            // (3) The subscription the order's lines link to. When a line names
+            //     one, never fall back to a different subscription.
+            $linkedId = LinkedSubscription::vatlySubscriptionId($vatlyOrder->lines());
+            if ($linkedId !== null) {
+                return LinkedSubscription::find($linkedId);
             }
 
             // (4) Customer binding → most-recent active subscription for that

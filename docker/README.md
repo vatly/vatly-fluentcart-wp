@@ -48,7 +48,7 @@ free version's product CLI surface is thin and the schema is non-trivial):
    - Flips the checkout to `paid`.
    - Creates a Vatly subscription and order.
    - Signs and POSTs `subscription.started` + `order.paid` webhooks to
-     `http://wordpress/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook`.
+     `http://localhost/wp-admin/admin-ajax.php?action=fluent_cart_vatly_webhook`.
    - Redirects you back to FluentCart's success page.
 7. The plugin's webhook reactions persist the subscription + transaction.
    Verify under **FluentCart → Subscriptions** and **FluentCart → Orders**.
