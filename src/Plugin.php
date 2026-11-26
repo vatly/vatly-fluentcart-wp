@@ -175,7 +175,7 @@ final class Plugin
     {
         $bindings = new FluentCartCustomerBindings();
 
-        return new Vatly(new Wiring(
+        $vatly = new Vatly(new Wiring(
             config:           $config,
             subscriptions:    new FluentCartSubscriptionRepository($this),
             orders:           new FluentCartOrderRepository($this),
@@ -205,6 +205,12 @@ final class Plugin
                 new HandleChargebackReversed($this, $bindings),
             ],
         ));
+
+        // The release zip bundles its dependencies, so the plugin's own version
+        // comes from the constant the release bumps, not from Composer.
+        $vatly->getApiClient()->addVersionString('vatly/vatly-fluentcart/' . VATLY_FLUENTCART_VERSION);
+
+        return $vatly;
     }
 
     public function webhookProcessor(): WebhookProcessor
