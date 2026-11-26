@@ -75,9 +75,10 @@ final class UserAgentTest extends TestCase
         $plugin = (new \ReflectionClass(Plugin::class))->newInstanceWithoutConstructor();
 
         foreach ([$plugin->vatly(), $plugin->vatlyForTestmode(true)] as $vatly) {
-            $userAgent = $vatly->getApiClient()->performHttpCall('GET', 'user-agent')->userAgent;
+            $client    = $vatly->getApiClient();
+            $userAgent = $client->performHttpCall('GET', 'user-agent')->userAgent;
 
-            self::assertStringContainsString(' PHP/' . phpversion() . ' Curl/* ', $userAgent);
+            self::assertSame(implode(' ', $client->getVersionStrings()), $userAgent);
             self::assertStringEndsWith(' vatly/vatly-fluentcart/' . VATLY_FLUENTCART_VERSION, $userAgent);
             self::assertSame(1, substr_count($userAgent, 'vatly/vatly-fluentcart/'));
         }
