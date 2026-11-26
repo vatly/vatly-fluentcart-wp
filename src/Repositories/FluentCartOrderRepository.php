@@ -20,6 +20,7 @@ use Vatly\Fluent\Data\UpdateOrderData;
 use Vatly\FluentCart\Models\FluentCartOrder;
 use Vatly\FluentCart\Plugin;
 use Vatly\FluentCart\Support\LinkedSubscription;
+use Vatly\FluentCart\Webhook\SubscriptionNotFoundException;
 
 /**
  * Bridges fluent's OrderRepository contract to FluentCart's data layer.
@@ -254,10 +255,9 @@ final class FluentCartOrderRepository implements OrderRepositoryInterface
             $subscription = LinkedSubscription::find($linkedId);
 
             // A paid renewal for a subscription FluentCart doesn't know (yet):
-            // fail the webhook so Vatly redelivers it, as for any other paid
-            // order that can't be booked. The IPN logs the message.
+            // the IPN answers 404 and logs the message, and Vatly redelivers it.
             if ($subscription === null) {
-                throw new RuntimeException(esc_html(sprintf(
+                throw new SubscriptionNotFoundException(esc_html(sprintf(
                     '[vatly-for-fluentcart] renewal order.paid %s: linked Vatly subscription %s is not known to FluentCart; Vatly will retry',
                     $data->vatlyId,
                     $linkedId,

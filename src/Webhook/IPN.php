@@ -54,6 +54,15 @@ final class IPN
             $this->respond(401, ['error' => 'invalid_signature']);
             return;
         } catch (\Throwable $e) {
+            // A reaction inside the processor found no subscription here (yet).
+            // That is not a failure of this site, so it isn't a 500; Vatly
+            // retries any non-2xx, so the webhook is still redelivered later.
+            if ($e instanceof SubscriptionNotFoundException) {
+                error_log('[vatly-for-fluentcart] webhook refused: ' . $e->getMessage());
+                $this->respond(404, ['error' => 'subscription_not_found']);
+                return;
+            }
+
             error_log('[vatly-for-fluentcart] webhook processing failed: ' . $e->getMessage());
             $this->respond(500, ['error' => 'processing_failed']);
             return;
