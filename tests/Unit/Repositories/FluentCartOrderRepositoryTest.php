@@ -170,7 +170,7 @@ class FluentCartOrderRepositoryTest extends TestCase
         try {
             $this->storeRenewal(['subscriptionId' => 'subscription_unknown']);
             self::fail('expected the webhook to fail');
-        } catch (\RuntimeException $e) {
+        } catch (\Vatly\FluentCart\Webhook\SubscriptionNotFoundException $e) {
             self::assertStringContainsString('subscription_unknown', $e->getMessage());
         }
 
@@ -183,7 +183,7 @@ class FluentCartOrderRepositoryTest extends TestCase
     {
         // No customer binding: this used to answer 200 with nothing booked,
         // so Vatly never redelivered it.
-        $this->expectException(\RuntimeException::class);
+        $this->expectException(\Vatly\FluentCart\Webhook\SubscriptionNotFoundException::class);
 
         try {
             (new FluentCartOrderRepository($this->pluginWhoseOrderLookupFails()))->store(new StoreOrderData(
